@@ -56,3 +56,23 @@ def generate_episode() -> dict:
         reasoning_effort="low",   # الموديل ده "بيفكر" قبل ما يجاوب، وده مش محتاجينه هنا
         include_reasoning=False,  # امنع خروج نص التفكير نفسه في الرد، عشان الـ JSON يطلع نضيف
         response_format={"type": "json_object"},
+            )
+
+    raw = completion.choices[0].message.content
+    episode = json.loads(raw)
+
+    required_keys = {"narration", "visual_keywords", "title", "caption"}
+    if not required_keys.issubset(episode.keys()):
+        sys.exit(f"خطأ: الرد من الموديل ناقص حقول مطلوبة: {episode.keys()}")
+
+    return episode
+
+
+if __name__ == "__main__":
+    episode = generate_episode()
+    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    OUTPUT_PATH.write_text(
+        json.dumps(episode, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    print(f"✅ اتكتبت الحلقة: {episode['title']}")
+    print(f"   كلمات البحث: {episode['visual_keywords']}")
