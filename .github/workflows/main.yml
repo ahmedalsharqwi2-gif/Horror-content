@@ -1,25 +1,62 @@
+# === إصلاح جديد مهم (سبب تضارب الحلقات المتعددة) ===
+# اتشال trigger الـ "push: branches: [main]" اللي كان موجود هنا قبل كده.
+# السبب: أي push على main (حتى تعديل بسيط في الكود وانت بتصلّح باج) كان
+# بيشغّل الـ pipeline بالكامل من الصفر: توليد سكريبت جديد + فيديو جديد +
+# نشر فوري لكل المنصات. وده اللي كان بيولّد حلقات مختلفة تمامًا وينشرها
+# فوق بعض من غير ما تقصد، في أوقات عشوائية حسب وقت الـ push مش حسب الكرون.
+#
+# دلوقتي الـ pipeline بيشتغل بس في حالتين مقصودتين:
+#   1) الكرون اليومي الساعة 13:00 UTC (= 3 عصرًا بتوقيت القاهرة).
+#   2) تشغيل يدوي متعمّد (workflow_dispatch) من تبويب Actions.
+#
+# لو عايز تدفع تعديل في كود السكريبتات، ادفعه عادي — مش هيشغّل حلقة جديدة
+# تلقائيًا. لو عايز تجرّب تشغيلة كاملة بعد التعديل، استخدم "Run workflow"
+# يدويًا من GitHub Actions.
+#
+# === تعديل جديد: ترقية الإصدارات لإزالة تحذير Node.js 20 ===
+# checkout@v4 → v5، setup-python@v5 → v6، upload-artifact@v4 → v5 —
+# الإصدارات دي بتشتغل على Node.js 24 بشكل أصلي (GitHub بيوقف دعم Node 20
+# نهائيًا على الـ runners)، فالتحذير هيختفي من اللوج.
+
 name: Create and Publish Horror Episode
 
 on:
   schedule:
-    - cron: "0 13 * * *"
-    - cron: "0 17 * * *"
-  workflow_dispatch: {}
+    - cron: "0 13 * * *" # 3 عصراً بتوقيت القاهرة (UTC+2) — الجزء الأول ينشر (customScheduled ≈ الآن)، الجزء الثاني بيتجدول تلقائيًا الساعة 7 مساءً عن طريق Buffer
+  workflow_dispatch:
+
+# يمنع تشغيلتين يشتغلوا فوق بعض في نفس الوقت (لو الكرون اتأخر وتزامن مع
+# تشغيل يدوي مثلاً)، بدل ما نعتمد بس على منع تكرار الـ push.
+concurrency:
+  group: horror-episode-pipeline
+  cancel-in-progress: false
 
 permissions:
   contents: write
 
 jobs:
-  build-and-publish:
+  build-draft:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
+        with:
+          # لازم fetch-depth: 0 (مش الافتراضي 1) عشان نقدر نعمل
+          # git pull --rebase بأمان في آخر خطوة من غير مشاكل shallow clone.
+          fetch-depth: 0
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          ffmpeg -version
+          ffprobe -version
 
       - name: Install dependencies
         run: pip install -r requirements.txt
@@ -42,22 +79,50 @@ jobs:
 
       - name: Publish directly via Buffer
         env:
-          BUFFER_ACCESS_TOKEN: ${{ secrets.BUFFER_ACCESS_TOKEN }}
+          BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
           BUFFER_CHANNEL_ID: ${{ secrets.BUFFER_CHANNEL_ID }}
+          BUFFER_YOUTUBE_CHANNEL_ID: ${{ secrets.BUFFER_YOUTUBE_CHANNEL_ID }}
+          BUFFER_FACEBOOK_CHANNEL_ID: ${{ secrets.BUFFER_FACEBOOK_CHANNEL_ID }}
+          BUFFER_INSTAGRAM_CHANNEL_ID: ${{ secrets.BUFFER_INSTAGRAM_CHANNEL_ID }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # الفرق بين نشر الجزء الأول (٣ عصرًا) والجزء الثاني (٧ مساءً) —
+          # 4 ساعات بالضبط. كلاهما customScheduled دلوقتي.
+          PART2_DELAY_HOURS: "4"
         run: python scripts/publish_buffer.py
 
       - name: Upload video as artifact (for your own records)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: published-video
-          path: output/final_video.mp4
+          path: output/final_video*.mp4
           retention-days: 14
+          if-no-files-found: error
 
       - name: Commit updated clip-tracking state
         run: |
           git config user.name "content-bot"
           git config user.email "bot@users.noreply.github.com"
           git add state/used_clips.json
-          git commit -m "chore: update used clips tracking [skip ci]" || echo "لا يوجد تغيير"
-          git push
+
+          if git diff --cached --quiet; then
+            echo "لا يوجد تغيير"
+            exit 0
+          fi
+
+          git commit -m "chore: update used clips tracking [skip ci]"
+
+          # الريموت ممكن يكون اتغيّر وإحنا لسه شغالين (push يدوي منك، أو
+          # تشغيلة تانية) — فبنعمل pull --rebase قبل كل محاولة push، مع
+          # إعادة محاولة (retry) لو حصل تعارض تاني بالصدفة، بدل ما
+          # الخطوة تفشل مباشرة زي ما كان بيحصل قبل كده.
+          max_attempts=5
+          attempt=1
+          until git pull --rebase origin main && git push; do
+            if [ "$attempt" -ge "$max_attempts" ]; then
+              echo "❌ فشل الـ push بعد $max_attempts محاولات."
+              exit 1
+            fi
+            echo "⚠️ push فشل (محاولة $attempt/$max_attempts) — هيتم إعادة المحاولة بعد pull --rebase..."
+            attempt=$((attempt + 1))
+            sleep $((attempt * 5))
+          done
