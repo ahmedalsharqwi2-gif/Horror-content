@@ -46,31 +46,13 @@ def generate_episode() -> dict:
         )
 
     completion = client.chat.completions.create(
-        model="openai/gpt-oss-120b",  # موديل مجاني قوي على Groq
+        model="openai/gpt-oss-120b",  # موديل مجاني قوي على Groq (البديل الرسمي بعد إلغاء llama-3.3-70b-versatile في أغسطس 2026)
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_message},
         ],
         temperature=0.9,  # تنويع أعلى بين الحلقات
-        max_tokens=3000,  # القصة بقت أطول (~2.5-2.8 دقيقة قراءة) فمحتاجة مساحة أكبر
+        max_tokens=4000,  # مساحة أكبر عشان القصة الطويلة + هامش أمان
+        reasoning_effort="low",   # الموديل ده "بيفكر" قبل ما يجاوب، وده مش محتاجينه هنا
+        include_reasoning=False,  # امنع خروج نص التفكير نفسه في الرد، عشان الـ JSON يطلع نضيف
         response_format={"type": "json_object"},
-    )
-
-    raw = completion.choices[0].message.content
-    episode = json.loads(raw)
-
-    required_keys = {"narration", "visual_keywords", "title", "caption"}
-    if not required_keys.issubset(episode.keys()):
-        sys.exit(f"خطأ: الرد من الموديل ناقص حقول مطلوبة: {episode.keys()}")
-
-    return episode
-
-
-if __name__ == "__main__":
-    episode = generate_episode()
-    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    OUTPUT_PATH.write_text(
-        json.dumps(episode, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    print(f"✅ اتكتبت الحلقة: {episode['title']}")
-    print(f"   كلمات البحث: {episode['visual_keywords']}")
