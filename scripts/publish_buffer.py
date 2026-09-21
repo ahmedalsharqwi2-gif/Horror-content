@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -119,13 +120,38 @@ def upload_media(video_path: Path, token: str) -> str:
     return response.json()["browser_download_url"]
 
 
+def video_dimensions(video_path: Path) -> tuple[int, int]:
+    """يقرأ أبعاد الفيديو قبل رفعه حتى لا يصل الكامل إلى YouTube كـShort."""
+    result = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=width,height",
+         "-of", "csv=p=0:s=x", str(video_path)],
+        capture_output=True, text=True, check=False,
+    )
+    try:
+        width, height = result.stdout.strip().split("x", 1)
+        return int(width), int(height)
+    except (ValueError, AttributeError):
+        raise RuntimeError(f"تعذر قراءة أبعاد الفيديو: {video_path}")
+
+
 def metadata_for(channel_id: str, asset_type: str, title: str) -> dict | None:
     service = CHANNEL_SERVICES.get(channel_id)
     if service == "youtube":
-        return {"youtube": {"title": title[:100] or "Horror Episode", "categoryId": "24", "privacy": "public", "madeForKids": False, "notifySubscribers": asset_type == "full_video", "isAiGenerated": True}}
+        # لا نرسل isAiGenerated=true تلقائيًا ولا نضع نصًا يعلن ذلك؛ هذا الحقل
+        # إفصاح رسمي وليس وسمًا شكليًا. إذا كان مطلوبًا في حسابك، أضفه صراحةً
+        # عبر إعداد مستقل بعد مراجعة سياسة YouTube.
+        return {"youtube": {
+            "type": "short" if asset_type == "short" else "post",
+            "title": title[:100] or "Horror Episode",
+            "categoryId": "24",
+            "privacy": "public",
+            "madeForKids": False,
+            "notifySubscribers": asset_type == "full_video",
+        }}
     if service == "facebook":
-        # الشورت Reel، والفيديو الكامل فيديو أصلي عادي.
-        return {"facebook": {"type": "reel" if asset_type == "short" else "video"}}
+        # قيم Facebook الرسمية هي post / reel / story؛ لا توجد قيمة video.
+        return {"facebook": {"type": "reel" if asset_type == "short" else "post"}}
     if service == "instagram":
         # نوع video يحاول إبقاء الفيديو الكامل Feed video؛ الشورت Reel.
         return {"instagram": {"type": "reel" if asset_type == "short" else "video", "shouldShareToFeed": True}}
@@ -202,6 +228,13 @@ def main() -> None:
     full_path = OUTPUT_DIR / "final_video_full.mp4"
     if not full_path.exists() or full_path.stat().st_size == 0:
         sys.exit(f"الفيديو الكامل غير موجود: {full_path}")
+    full_width, full_height = video_dimensions(full_path)
+    if full_width <= full_height:
+        sys.exit(
+            f"الفيديو الكامل ليس أفقيًا ({full_width}x{full_height}). "
+            "شغّل assemble_video.py من النسخة الجديدة قبل النشر."
+        )
+    print(f"✅ أبعاد الفيديو الكامل: {full_width}x{full_height} — سيُرسل كفيديو YouTube عادي")
 
     shorts = sorted(OUTPUT_DIR.glob("short_*_*.mp4"))
     if not shorts:
