@@ -133,6 +133,25 @@ def load_used_regions(limit: int = REGION_HISTORY_LIMIT) -> list[str]:
     return regions[-limit:]
 
 
+def load_used_hooks(limit: int = HISTORY_LIMIT) -> list[str]:
+    """
+    يجيب آخر N هوكات اتستخدمت. الهوك بيوصف الحادثة الواقعية نفسها بدقة
+    أكتر من العنوان (اللي ممكن يتغيّر صياغةً بين حلقة وحلقة عن نفس
+    الحادثة بالظبط) — بيُستخدم هنا عشان نمنع الموديل يرجع لنفس القضية
+    الشهيرة (زي حادثة ممر دياتلوف) تحت عنوان مختلف. آمن على ملفات
+    used_clips.json القديمة اللي مفيهاش حقل "hook" أصلاً.
+    """
+    history_path = SCRIPT_DIR.parent / "state" / "used_clips.json"
+    if not history_path.exists():
+        return []
+    try:
+        data = json.loads(history_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return []
+    hooks = [h.get("hook", "") for h in data.get("history", []) if h.get("hook")]
+    return hooks[-limit:]
+
+
 def looks_truncated(narration: str) -> bool:
     stripped = narration.strip()
     if not stripped:
@@ -163,7 +182,9 @@ def create_completion(client: Groq, **kwargs):
 
 # ─────────────────────────── التوليد ───────────────────────────
 
-def build_user_message(recent_titles: list[str], recent_regions: list[str]) -> str:
+def build_user_message(
+    recent_titles: list[str], recent_regions: list[str], recent_hooks: list[str],
+) -> str:
     message = (
         "اكتب حلقة جديدة تمامًا.\n\n"
         "⚠️ مهم جدًا بخصوص اللغة: اكتب حقل narration بالكامل باللغة العربية "
@@ -176,11 +197,27 @@ def build_user_message(recent_titles: list[str], recent_regions: list[str]) -> s
         "الصفر. لو التفاصيل الدقيقة مش متأكد منها 100%، استخدم صياغة "
         "شائعة زي 'تقول الروايات إن...' أو 'وفقًا لما تم توثيقه...' بدل "
         "تقديم تفاصيل مختلقة كحقيقة مؤكدة قطعيًا.\n\n"
+        "⚠️ مهم جدًا جدًا بخصوص عدم التكرار: ممنوع منعًا باتًا اختيار نفس "
+        "الحادثة الواقعية اللي اتستخدمت في حلقة سابقة، حتى لو غيّرت "
+        "العنوان أو الصياغة بالكامل. راجع قائمة الهوكات (وليس العناوين "
+        "فقط) اللي اتستخدمت قبل كده تحت — لو الحادثة اللي في بالك بتوصف "
+        "نفس واقعة أي هوك منهم (حتى بتفاصيل أو زاوية مختلفة شكليًا)، "
+        "ارفضها فورًا واختار حادثة مختلفة تمامًا. بالتحديد: تجنب حادثة "
+        "'ممر دياتلوف' (Dyatlov Pass) في روسيا كليًا إلا في حالات نادرة "
+        "جدًا، لأنها من أكثر القضايا استخدامًا وتكرارًا في هذا النوع من "
+        "المحتوى على الإنترنت وأصبحت مستهلكة ومتوقعة للمشاهد، وركّز بدلًا "
+        "منها على قضايا حقيقية موثقة لكن أقل شهرة وأقل تداولًا.\n\n"
         "⚠️ مهم جدًا بخصوص الهوك: أول جملة في حقل hook لازم تكون صادمة "
         "ومباشرة وتخلق فضول فوري (سؤال مثير، حقيقة صادمة، أو مشهد لحظة "
         "الذروة) — الهدف إنها توقف المشاهد عن الاسكرول في أول ثانيتين. "
         "وبعدين ابدأ narration بنفس الهوك أو صياغة قريبة جدًا منه كأول "
         "جملة فيه، مش بمقدمة عامة بطيئة.\n\n"
+        "⚠️ مهم جدًا بخصوص شدة الرعب: الهدف مش إنك تحكي واقعة حصلت وخلاص "
+        "— الهدف إن قلب المشاهد يدق بسرعة وهو بيسمع. استخدم تفاصيل حسّية "
+        "(نبض، تنفّس متقطع، عرق بارد، صمت مفاجئ يقطعه صوت) بدل جمل عامة "
+        "زي 'كان خايف'. صعّد التوتر باستمرار جملة بعد جملة، مش بس في "
+        "الذروة، واستخدم جملاً قصيرة متقطعة في لحظات الترقب. راجع "
+        "التعليمات التفصيلية في الـ system prompt لو محتاج تفاصيل أكتر.\n\n"
         "⚠️ مهم جدًا بخصوص visual_keywords: كل كلمة بحث لازم تكون مشتقة "
         "من تفاصيل ملموسة ومحددة مذكورة فعليًا في narration (المكان "
         "بالاسم أو الوصف، العصر/الفترة الزمنية، الأغراض أو المشاهد "
@@ -199,6 +236,12 @@ def build_user_message(recent_titles: list[str], recent_regions: list[str]) -> s
             "\n\nالعناوين اللي اتستخدمت قبل كده (تجنب أي تشابه معاها):\n- "
             + "\n- ".join(recent_titles)
         )
+    if recent_hooks:
+        message += (
+            "\n\nالهوكات (ومن ثم الحوادث الفعلية) اللي اتستخدمت قبل كده — "
+            "ممنوع اختيار نفس الحادثة حتى بهوك أو عنوان مختلف:\n- "
+            + "\n- ".join(recent_hooks)
+        )
     if recent_regions:
         message += (
             "\n\nالمناطق/الدول اللي اتستخدمت قبل كده (اختار منطقة مختلفة "
@@ -214,7 +257,9 @@ def generate_episode() -> dict:
 
     client = Groq(api_key=api_key)
     system_prompt = load_system_prompt()
-    user_message = build_user_message(load_used_history(), load_used_regions())
+    user_message = build_user_message(
+        load_used_history(), load_used_regions(), load_used_hooks(),
+    )
 
     budget = MAX_COMPLETION_TOKENS
     last_error = "لا يوجد"
