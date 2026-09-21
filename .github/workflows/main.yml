@@ -45,6 +45,8 @@ jobs:
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GROQ_REASONING_EFFORT: low
+          TARGET_WORDS: "800"
+          MIN_NARRATION_WORDS: "640"
         run: python scripts/generate_script.py
 
       - name: Fetch landscape stock clips
