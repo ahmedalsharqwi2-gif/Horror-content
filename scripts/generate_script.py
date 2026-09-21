@@ -56,7 +56,7 @@ DEFAULT_MODEL = "openai/gpt-oss-120b"
 MODEL = (os.getenv("GROQ_MODEL") or DEFAULT_MODEL).strip()
 REASONING_EFFORT = (os.getenv("GROQ_REASONING_EFFORT") or "low").strip()
 TEMPERATURE = 0.85
-MAX_COMPLETION_TOKENS = 6000
+MAX_COMPLETION_TOKENS = 9000
 # اتحسب على أساس إن الحلقة دايمًا بتتقسم لجزئين (زي ما assemble_video.py
 # بيفترض دايمًا: final_video_part1.mp4 + final_video_part2.mp4)، وكل جزء
 # له حد أقصى صلب 90 ثانية (MAX_DURATION_SECONDS في assemble_video.py).
@@ -67,8 +67,8 @@ MAX_COMPLETION_TOKENS = 6000
 # لو قللت الرقم ده كتير، الجزء التاني ممكن يبقى قصير جدًا أو شبه فاضي.
  # 800 كلمة تقريبًا تعطي 5–6 دقائق بالعربية مع الوقفات الطبيعية.
 TARGET_WORDS = int(os.getenv("TARGET_WORDS") or "800")
-MIN_NARRATION_WORDS = int(os.getenv("MIN_NARRATION_WORDS") or str(round(TARGET_WORDS * 0.80)))
-MAX_ATTEMPTS = 2
+MIN_NARRATION_WORDS = int(os.getenv("MIN_NARRATION_WORDS") or "720")
+MAX_ATTEMPTS = 4
 HISTORY_LIMIT = 8
 LENGTH_ESCALATION = 1.5
 
@@ -272,12 +272,20 @@ def generate_episode() -> dict:
     print(f"🎬 الموديل: {MODEL} | reasoning_effort: {REASONING_EFFORT}")
 
     for attempt in range(1, MAX_ATTEMPTS + 1):
+        attempt_message = user_message
+        if attempt > 1:
+            attempt_message += (
+                "\n\nتصحيح إلزامي للمحاولة الحالية: الرد السابق كان أقصر من المطلوب. "
+                f"اكتب narration بين {MIN_NARRATION_WORDS} و{TARGET_WORDS + 120} كلمة؛ "
+                "لا تختصر الأحداث ولا تحذف التفاصيل الحسية. احسب الكلمات قبل إخراج JSON، "
+                "ولا تعتبر القصة مكتملة إذا كانت أقل من الحد الأدنى."
+            )
         completion = create_completion(
             client,
             model=MODEL,
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message},
+                {"role": "user", "content": attempt_message},
             ],
             temperature=TEMPERATURE,
             max_completion_tokens=budget,
