@@ -50,8 +50,11 @@ OUTPUT_PATH = SCRIPT_DIR.parent / "state" / "current_episode.json"
 
 # ─────────────────────────── الإعدادات ───────────────────────────
 
-MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
-REASONING_EFFORT = os.getenv("GROQ_REASONING_EFFORT", "low")
+DEFAULT_MODEL = "openai/gpt-oss-120b"
+# GitHub Actions يعيد المتغير غير المعرّف كقيمة فارغة، وos.getenv(key, default)
+# لا يستخدم default في هذه الحالة؛ لذلك نستخدم or صراحةً.
+MODEL = (os.getenv("GROQ_MODEL") or DEFAULT_MODEL).strip()
+REASONING_EFFORT = (os.getenv("GROQ_REASONING_EFFORT") or "low").strip()
 TEMPERATURE = 0.85
 MAX_COMPLETION_TOKENS = 6000
 # اتحسب على أساس إن الحلقة دايمًا بتتقسم لجزئين (زي ما assemble_video.py
