@@ -109,7 +109,7 @@ def search_pexels(keyword: str, api_key: str, used_ids: set, count: int) -> list
 
         params = {
             "query": keyword,
-            "orientation": "portrait",  # مناسب للشورتس 9:16
+            "orientation": "landscape",  # المصدر الأساسي للفيديو الكامل 16:9؛ الشورتس تُقص لاحقًا
             "per_page": RESULTS_PER_PAGE,
             "page": page,
         }
