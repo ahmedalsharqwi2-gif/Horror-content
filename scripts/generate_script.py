@@ -65,7 +65,9 @@ MAX_COMPLETION_TOKENS = 6000
 #   يعني تقريبًا 47-75 ثانية للجزء الواحد بعد التقسيم بالنص — مسافة أمان
 #   كويسة تحت حد الـ90 ثانية لكل جزء.
 # لو قللت الرقم ده كتير، الجزء التاني ممكن يبقى قصير جدًا أو شبه فاضي.
-TARGET_WORDS = int(os.getenv("TARGET_WORDS", "300"))
+ # 800 كلمة تقريبًا تعطي 5–6 دقائق بالعربية مع الوقفات الطبيعية.
+TARGET_WORDS = int(os.getenv("TARGET_WORDS") or "800")
+MIN_NARRATION_WORDS = int(os.getenv("MIN_NARRATION_WORDS") or str(round(TARGET_WORDS * 0.80)))
 MAX_ATTEMPTS = 2
 HISTORY_LIMIT = 8
 LENGTH_ESCALATION = 1.5
@@ -309,6 +311,12 @@ def generate_episode() -> dict:
         narration = str(episode.get("narration", "")).strip()
         if looks_truncated(narration):
             last_error = "نص narration شكله متقطوع (مش منتهي بعلامة ترقيم واضحة)"
+            print(f"⚠️ محاولة {attempt}/{MAX_ATTEMPTS}: {last_error} — هعيد المحاولة...")
+            continue
+
+        word_count = len(narration.split())
+        if word_count < MIN_NARRATION_WORDS:
+            last_error = f"النص قصير ({word_count} كلمة؛ المطلوب على الأقل {MIN_NARRATION_WORDS})"
             print(f"⚠️ محاولة {attempt}/{MAX_ATTEMPTS}: {last_error} — هعيد المحاولة...")
             continue
 
