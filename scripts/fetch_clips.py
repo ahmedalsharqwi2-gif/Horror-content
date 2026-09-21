@@ -232,6 +232,12 @@ def main():
     used_data["pexels_ids_used"] = list(used_ids)
     used_data["history"].append({
         "title": episode["title"],
+        # الهوك بيوصف الحادثة الواقعية نفسها بدقة أكتر من العنوان (اللي
+        # ممكن يتغيّر صياغةً بين حلقة وحلقة عن نفس الحادثة بالظبط). بيُقرأ
+        # لاحقًا في load_used_hooks() جوه generate_script.py عشان نمنع
+        # الموديل يرجع لنفس القضية الشهيرة (زي حادثة ممر دياتلوف) حتى لو
+        # غيّر صياغة العنوان.
+        "hook": episode.get("hook", ""),
         # المنطقة/الدولة اللي القصة منها (من generate_script.py) — بتُقرأ
         # لاحقًا في load_used_regions() جوه generate_script.py عشان نمنع
         # تكرار نفس المنطقة الجغرافية في حلقات متتالية. .get() بأمان عشان
