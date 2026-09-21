@@ -67,7 +67,9 @@ MAX_COMPLETION_TOKENS = 9000
 # لو قللت الرقم ده كتير، الجزء التاني ممكن يبقى قصير جدًا أو شبه فاضي.
  # 800 كلمة تقريبًا تعطي 5–6 دقائق بالعربية مع الوقفات الطبيعية.
 TARGET_WORDS = int(os.getenv("TARGET_WORDS") or "800")
-MIN_NARRATION_WORDS = int(os.getenv("MIN_NARRATION_WORDS") or "720")
+# حد قبول عملي؛ الموديل قد يختلف قليلًا عن الهدف، و650 كلمة تعطي عادةً
+# نحو خمس دقائق مع سرعة عربية طبيعية ووقفات TTS. الهدف الإرشادي يظل 800.
+MIN_NARRATION_WORDS = int(os.getenv("MIN_NARRATION_WORDS") or "650")
 MAX_ATTEMPTS = 4
 HISTORY_LIMIT = 8
 LENGTH_ESCALATION = 1.5
@@ -327,6 +329,8 @@ def generate_episode() -> dict:
             last_error = f"النص قصير ({word_count} كلمة؛ المطلوب على الأقل {MIN_NARRATION_WORDS})"
             print(f"⚠️ محاولة {attempt}/{MAX_ATTEMPTS}: {last_error} — هعيد المحاولة...")
             continue
+        if word_count < TARGET_WORDS:
+            print(f"ℹ️ النص مقبول: {word_count} كلمة (الهدف الإرشادي {TARGET_WORDS})")
 
         if not episode.get("visual_keywords"):
             last_error = "حقل visual_keywords فاضي"
