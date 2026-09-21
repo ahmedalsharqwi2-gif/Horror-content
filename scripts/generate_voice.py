@@ -46,6 +46,9 @@ DEFAULT_PAUSE = 0.5
 
 ARABIC_DIACRITICS_PATTERN = re.compile(r"[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED\u08D3-\u08E1\u08E3-\u08FF]")
 _WORD_TOKEN_PATTERN = re.compile(r"[\w\u0600-\u06FF]+", re.UNICODE)
+# علامات تُحذف من النص المرئي فقط حتى يبدو طبيعيًا وغير آلي. نص الراوي
+# الأصلي يظل محتفظًا بها لأن edge-tts يستخدمها لصناعة الوقفات الصحيحة.
+DISPLAY_PUNCTUATION = str.maketrans(".,،؛:!?؟…-—_()[]{}\"«»/\\", " " * 23)
 HARD_WORDS_DIACRITICS = {
     "عدة": "عِدّة", "قلبه": "قَلْبه", "لعنة": "لَعنة", "مسكون": "مَسكون",
     "جثة": "جُثّة", "همس": "هَمْس", "أشباح": "أَشباح", "ظل": "ظِلّ",
@@ -137,11 +140,14 @@ def ass_time(seconds: float) -> str:
 
 
 def two_lines(words: list[str]) -> str:
-    words = [word.strip() for word in words if word.strip()]
+    words = [word.translate(DISPLAY_PUNCTUATION).strip() for word in words]
+    words = [word for word in words if word]
     if len(words) <= 2:
         return "\u200f" + " ".join(words)
     midpoint = (len(words) + 1) // 2
-    return "\u200f" + " ".join(words[:midpoint]) + r"\N\u200f" + " ".join(words[midpoint:])
+    # \N هو كسر سطر ASS، أما U+200F فهو حرف اتجاه غير مرئي. لا نستخدم
+    # النص الحرفي "\\u200f" حتى لا يظهر بجانب الكلام في الفيديو.
+    return "\u200f" + " ".join(words[:midpoint]) + r"\N" + "\u200f" + " ".join(words[midpoint:])
 
 
 def build_ass_header() -> str:
