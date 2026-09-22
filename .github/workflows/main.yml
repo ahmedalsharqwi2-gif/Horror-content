@@ -14,6 +14,7 @@ concurrency:
 
 permissions:
   contents: write
+  issues: write
 
 jobs:
   build-and-publish:
@@ -83,6 +84,16 @@ jobs:
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
         run: python scripts/publish_youtube_direct.py
 
+      # تحذير مبكر قبل انتهاء صلاحية YT_REFRESH_TOKEN (7 أيام لتطبيق في
+      # وضع Testing عند Google) — بيفتح GitHub Issue قبل الموعد بأيام
+      # أمان بدل ما ننتظر فشل النشر فعليًا. يشتغل دايمًا (always())، حتى
+      # لو الخطوة اللي فاتت فشلت، عشان يفضل يقرأ آخر تاريخ نجاح معروف.
+      - name: Check YouTube token age
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/check_youtube_token_age.py
+
       - name: Upload generated media artifacts
         uses: actions/upload-artifact@v5
         with:
@@ -98,7 +109,7 @@ jobs:
         run: |
           git config user.name "content-bot"
           git config user.email "bot@users.noreply.github.com"
-          git add state/used_clips.json
+          git add state/used_clips.json state/yt_token_last_success.json
           if git diff --cached --quiet; then
             echo "لا يوجد تغيير في حالة الكليبات"
             exit 0
