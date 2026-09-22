@@ -336,13 +336,28 @@ def main() -> None:
     successes = 0
     failures = []
     for asset_type, path, delay in assets:
+        platform_hint = path.stem.rsplit("_", 1)[-1] if asset_type == "short" else None
+        if platform_hint and platform_hint not in services.values():
+            # ملهاش قناة معرّفة أصلًا (زي انستجرام لو الـ secret ناقص) —
+            # نتخطى رفع الملف نفسه بدل ما نرفعه لـ GitHub من غير أي
+            # وجهة نشر، وده كان بيظهر كسطر "📤" مُضلّل بيوحي بنجاح.
+            print(f"⏭️  {path.name}: تخطي — لا توجد قناة {platform_hint} معرّفة (لم يُرفع الملف)")
+            continue
         url = upload_media(path, github_token)
         due_at = iso_after(delay)
-        platform_hint = path.stem.rsplit("_", 1)[-1] if asset_type == "short" else None
         print(f"📤 {path.name} → {due_at} UTC")
         for cid in ids:
             service = services[cid]
             if platform_hint and platform_hint != service:
+                continue
+            if asset_type == "full_video" and service == "youtube":
+                # Buffer لا يدعم فيديوهات يوتيوب الطويلة (Long-form) إطلاقًا،
+                # يدعم Shorts فقط. الفيديو الكامل بيتنشر ليوتيوب بشكل منفصل
+                # عبر scripts/publish_youtube_direct.py باستخدام YouTube Data
+                # API مباشرة، فبنتخطى محاولته هنا بدل ما يفشل دايمًا برسالة
+                # "Video must be no longer than 3 minutes / must be vertical
+                # for YouTube Shorts".
+                print("  ⏭️  youtube: يُنشر بشكل منفصل عبر publish_youtube_direct.py (تم التخطي هنا)")
                 continue
             try:
                 if org_id is not None and pending_count(org_id, cid, api_key) >= CHANNEL_PENDING_LIMIT:
