@@ -73,6 +73,16 @@ jobs:
           CHANNEL_PENDING_LIMIT: "10"
         run: python scripts/publish_buffer.py
 
+      # Buffer لا يدعم فيديوهات يوتيوب الطويلة (Long-form) إطلاقًا — يدعم
+      # YouTube Shorts فقط، لذلك الفيديو الكامل يُنشر ليوتيوب هنا بشكل
+      # منفصل عبر YouTube Data API مباشرة (شوف publish_youtube_direct.py).
+      - name: Publish full video directly to YouTube
+        env:
+          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+        run: python scripts/publish_youtube_direct.py
+
       - name: Upload generated media artifacts
         uses: actions/upload-artifact@v5
         with:
