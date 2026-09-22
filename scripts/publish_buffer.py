@@ -6,6 +6,32 @@
 - short_2 بعد FULL_TO_SHORT_2_HOURS (افتراضيًا 7 ساعات).
 
 لا يوجد هنا منطق part1/part2. كل أصل يرفع وينشر Native على كل قناة.
+
+=== إصلاح جديد (يوتيوب / انستجرام) ===
+1) يوتيوب: Buffer's `YoutubePostMetadataInput` ليس فيه حقل `type` إطلاقًا
+   (تأكدنا من توثيق Buffer الرسمي على developers.buffer.com). حقل `type`
+   موجود بس في نوع الـ output (`YoutubePostMetadata`) اللي بيوصف حالة
+   البوست بعد النشر، مش نوع الـ input اللي بنستخدمه وقت الإنشاء. إرساله
+   كان بيرجّع "Field 'type' is not defined by type 'YoutubePostMetadataInput'"
+   لكل الأصول (الفيديو الكامل + الشورتس) بنفس الرسالة بالظبط. الحل: حذف
+   الحقل من فرع يوتيوب خالص. يوتيوب بيحدد تلقائيًا لو الفيديو "Short" من
+   مواصفات الملف نفسه (نسبة أبعاد رأسية/مربعة + مدة قصيرة)، مش من أي حقل
+   بتبعته لـ Buffer.
+2) انستجرام: `InstagramPostMetadataInput.type` حقل `PostType!` إلزامي،
+   وقيمه المسموحة (enum PostType) هي: post, reel, story, short, carousel,
+   event, offer, ghost_post, thread, whats_new — القيمة "video" مش من
+   ضمنهم، فكانت هترجع خطأ enum مشابه لو اتبعتت فعلًا. الحل: "post"
+   للفيديو الكامل (فيديو Feed عادي)، و"reel" للشورتس (زي ما هو).
+3) انستجرام كان مش بيتنشرله خالص (ولا حتى محاولة فاشلة في اللوج) لأن
+   channel_ids() كانت بتعتمد على متغير BUFFER_CHANNEL_ID المنفصل، ولو
+   القيمة دي متظبطة يدويًا وناقص منها معرّف انستجرام، بيرجع بس يوتيوب/
+   فيسبوك ويتجاهل انستجرام بصمت تام من غير أي رسالة خطأ. الحل: channel_ids()
+   بقت تعتمد دايمًا على CHANNEL_SERVICES (المبني من BUFFER_YOUTUBE_CHANNEL_ID
+   / BUFFER_FACEBOOK_CHANNEL_ID / BUFFER_INSTAGRAM_CHANNEL_ID مباشرة)، بدل
+   القائمة المجمّعة القديمة اللي ممكن تفضل من غير تحديث. لسه لازم تتأكد إن
+   BUFFER_INSTAGRAM_CHANNEL_ID نفسه متظبط في GitHub Secrets بمعرّف قناة
+   انستجرام الصحيح — لو الـ secret ده مش موجود أصلًا، مفيش كود يقدر يعوّض
+   عنه.
 """
 
 from __future__ import annotations
@@ -141,8 +167,9 @@ def metadata_for(channel_id: str, asset_type: str, title: str) -> dict | None:
         # لا نرسل isAiGenerated=true تلقائيًا ولا نضع نصًا يعلن ذلك؛ هذا الحقل
         # إفصاح رسمي وليس وسمًا شكليًا. إذا كان مطلوبًا في حسابك، أضفه صراحةً
         # عبر إعداد مستقل بعد مراجعة سياسة YouTube.
+        # ملحوظة: بدون "type" — YoutubePostMetadataInput مفيهوش الحقل ده
+        # أصلًا (شوف الشرح في أعلى الملف).
         return {"youtube": {
-            "type": "short" if asset_type == "short" else "post",
             "title": title[:100] or "Horror Episode",
             "categoryId": "24",
             "privacy": "public",
@@ -153,8 +180,9 @@ def metadata_for(channel_id: str, asset_type: str, title: str) -> dict | None:
         # قيم Facebook الرسمية هي post / reel / story؛ لا توجد قيمة video.
         return {"facebook": {"type": "reel" if asset_type == "short" else "post"}}
     if service == "instagram":
-        # نوع video يحاول إبقاء الفيديو الكامل Feed video؛ الشورت Reel.
-        return {"instagram": {"type": "reel" if asset_type == "short" else "video", "shouldShareToFeed": True}}
+        # "post" = فيديو Feed عادي للحلقة الكاملة، "reel" للشورتس. "video"
+        # مش قيمة صحيحة في enum PostType (شوف الشرح في أعلى الملف).
+        return {"instagram": {"type": "reel" if asset_type == "short" else "post", "shouldShareToFeed": True}}
     return None
 
 
@@ -206,9 +234,11 @@ def create_post(video_url: str, text: str, title: str, channel_id: str, api_key:
 
 
 def channel_ids() -> list[str]:
-    raw = os.environ.get("BUFFER_CHANNEL_ID", "").replace(";", ",").replace("\n", ",")
-    ids = [x.strip().strip("\"'") for x in raw.split(",") if x.strip()]
-    return list(dict.fromkeys(ids or CHANNEL_SERVICES.keys()))
+    # بقت دايمًا بترجع كل القنوات المعرّفة فعليًا (من BUFFER_YOUTUBE_CHANNEL_ID
+    # / BUFFER_FACEBOOK_CHANNEL_ID / BUFFER_INSTAGRAM_CHANNEL_ID) بدل ما تعتمد
+    # على BUFFER_CHANNEL_ID المنفصل، اللي كان ممكن يفضل من غير تحديث ويستبعد
+    # قناة زي انستجرام بصمت تام من غير أي رسالة خطأ في اللوج.
+    return list(CHANNEL_SERVICES.keys())
 
 
 def main() -> None:
@@ -243,9 +273,18 @@ def main() -> None:
     shorts = sorted(shorts, key=lambda p: (int(p.stem.split("_")[1]), p.stem))
 
     ids = channel_ids()
-    unknown = [cid for cid in ids if cid not in CHANNEL_SERVICES]
-    if unknown:
-        sys.exit("قنوات غير معروفة الخدمة؛ أضفها إلى BUFFER_*_CHANNEL_ID: " + ", ".join(unknown))
+    if not ids:
+        sys.exit(
+            "لا يوجد أي قناة معرّفة: تأكد إن BUFFER_YOUTUBE_CHANNEL_ID / "
+            "BUFFER_FACEBOOK_CHANNEL_ID / BUFFER_INSTAGRAM_CHANNEL_ID متظبطين "
+            "في GitHub Secrets."
+        )
+    missing_services = {"youtube", "facebook", "instagram"} - set(CHANNEL_SERVICES.values())
+    if missing_services:
+        print(
+            "⚠️ القنوات دي مفيش لها معرّف قناة متظبط في GitHub Secrets وهتتخطى "
+            "بالكامل: " + ", ".join(sorted(missing_services))
+        )
 
     org_id = organization_id(api_key) if ENABLE_PREFLIGHT_CHECK else None
     services = {cid: CHANNEL_SERVICES[cid] for cid in ids}
