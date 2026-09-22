@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from google.auth.transport.requests import Request
@@ -34,6 +35,10 @@ SCRIPT_DIR = Path(__file__).parent
 ROOT_DIR = SCRIPT_DIR.parent
 EPISODE_PATH = ROOT_DIR / "state" / "current_episode.json"
 VIDEO_PATH = ROOT_DIR / "output" / "final_video_full.mp4"
+# يُحدَّث في كل مرة يتجدّد فيها access token بنجاح، عشان
+# scripts/check_youtube_token_age.py يقدر يحسب منه كام يوم فاضل قبل ما
+# Google يلغي صلاحية الـ refresh_token (7 أيام لتطبيق في وضع Testing).
+TOKEN_STATE_PATH = ROOT_DIR / "state" / "yt_token_last_success.json"
 
 TOKEN_URI = "https://oauth2.googleapis.com/token"
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
@@ -73,7 +78,27 @@ def load_credentials() -> Credentials:
     # refresh_token (منتهي / مسحوب) بدري وبرسالة واضحة بدل ما يفشل داخل
     # المكتبة بشكل مبهم.
     credentials.refresh(Request())
+    _record_token_success()
     return credentials
+
+
+def _record_token_success() -> None:
+    """يسجّل تاريخ آخر مرة نجح فيها تجديد access token بنجاح، عشان
+    check_youtube_token_age.py يقدر يحسب منه قرب انتهاء صلاحية
+    refresh_token (7 أيام لتطبيق في وضع Testing) ويحذّرنا قبل ما ينتهي
+    فعليًا. فشل الكتابة هنا (مثلًا مجلد state غير قابل للكتابة) لا يوقف
+    النشر — دي مجرد بيانات مساعدة للتنبيه، مش جزء أساسي من عملية الرفع."""
+    try:
+        TOKEN_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        TOKEN_STATE_PATH.write_text(
+            json.dumps(
+                {"last_success_utc": datetime.now(timezone.utc).isoformat(timespec="seconds")},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        print(f"⚠️ تعذّر تسجيل تاريخ نجاح التوكن (غير خطير): {exc}")
 
 
 def load_title_and_description() -> tuple[str, str]:
