@@ -71,6 +71,22 @@ def normalize_text(text: str) -> str:
     return re.sub(r"\s+", " ", strip_diacritics(text)).strip()
 
 
+def apply_phonetic_hints(text: str, hints: list[dict]) -> str:
+    """يستبدل كل مدخل من phonetic_hints (كلمة أو عبارة أجنبية كما وردت
+    بالضبط في narration) بنسختها المشكّلة، قبل أي تشكيل عام. بترتب
+    المدخلات من الأطول للأقصر أولاً عشان عبارة من كذا كلمة (زي اسم مدينة
+    مركّب) تتستبدل كوحدة واحدة قبل ما أي كلمة مفردة جواها تتستبدل غلط لو
+    ظهرت في مدخل تاني. المفروض phonetic تكون نفس الكلمة بالحروف الأساسية
+    بالظبط مع إضافة تشكيل بس (شوف horror_system_prompt.md)، فـ
+    strip_diacritics() بترجّعها زي الأصل تمامًا في الترجمة."""
+    for hint in sorted(hints, key=lambda h: len(str(h.get("word", ""))), reverse=True):
+        word = str(hint.get("word", "")).strip()
+        phonetic = str(hint.get("phonetic", "")).strip()
+        if word and phonetic:
+            text = text.replace(word, phonetic)
+    return text
+
+
 def apply_light_diacritics(text: str) -> str:
     def replace(match: re.Match) -> str:
         word = match.group(0)
@@ -232,7 +248,11 @@ def main() -> None:
 
     CLIPS_DIR.mkdir(parents=True, exist_ok=True)
     ASSETS_DIR.mkdir(parents=True, exist_ok=True)
-    synthesize_voice(apply_light_diacritics(narration))
+
+    phonetic_hints = episode.get("phonetic_hints") or []
+    voice_text = apply_phonetic_hints(narration, phonetic_hints)
+    voice_text = apply_light_diacritics(voice_text)
+    synthesize_voice(voice_text)
     mix_music_into_voice()
 
     episode.pop("parts", None)
@@ -243,6 +263,7 @@ def main() -> None:
     EPISODE_PATH.write_text(json.dumps(episode, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"✅ صوت كامل: {FINAL_AUDIO}")
     print(f"✅ ترجمة أفقية متزامنة: {SUBTITLES}")
+    print(f"✅ تلميحات نطق مُطبّقة: {len(phonetic_hints)}")
 
 
 if __name__ == "__main__":
