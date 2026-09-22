@@ -50,13 +50,10 @@ OUTPUT_PATH = SCRIPT_DIR.parent / "state" / "current_episode.json"
 
 # ─────────────────────────── الإعدادات ───────────────────────────
 
-DEFAULT_MODEL = "openai/gpt-oss-120b"
-# GitHub Actions يعيد المتغير غير المعرّف كقيمة فارغة، وos.getenv(key, default)
-# لا يستخدم default في هذه الحالة؛ لذلك نستخدم or صراحةً.
-MODEL = (os.getenv("GROQ_MODEL") or DEFAULT_MODEL).strip()
-REASONING_EFFORT = (os.getenv("GROQ_REASONING_EFFORT") or "low").strip()
+MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+REASONING_EFFORT = os.getenv("GROQ_REASONING_EFFORT", "low")
 TEMPERATURE = 0.85
-MAX_COMPLETION_TOKENS = 9000
+MAX_COMPLETION_TOKENS = 6000
 # اتحسب على أساس إن الحلقة دايمًا بتتقسم لجزئين (زي ما assemble_video.py
 # بيفترض دايمًا: final_video_part1.mp4 + final_video_part2.mp4)، وكل جزء
 # له حد أقصى صلب 90 ثانية (MAX_DURATION_SECONDS في assemble_video.py).
@@ -65,12 +62,8 @@ MAX_COMPLETION_TOKENS = 9000
 #   يعني تقريبًا 47-75 ثانية للجزء الواحد بعد التقسيم بالنص — مسافة أمان
 #   كويسة تحت حد الـ90 ثانية لكل جزء.
 # لو قللت الرقم ده كتير، الجزء التاني ممكن يبقى قصير جدًا أو شبه فاضي.
- # 800 كلمة تقريبًا تعطي 5–6 دقائق بالعربية مع الوقفات الطبيعية.
-TARGET_WORDS = int(os.getenv("TARGET_WORDS") or "800")
-# حد قبول عملي؛ الموديل قد يختلف قليلًا عن الهدف، و650 كلمة تعطي عادةً
-# نحو خمس دقائق مع سرعة عربية طبيعية ووقفات TTS. الهدف الإرشادي يظل 800.
-MIN_NARRATION_WORDS = int(os.getenv("MIN_NARRATION_WORDS") or "650")
-MAX_ATTEMPTS = 4
+TARGET_WORDS = int(os.getenv("TARGET_WORDS", "300"))
+MAX_ATTEMPTS = 2
 HISTORY_LIMIT = 8
 LENGTH_ESCALATION = 1.5
 
@@ -93,10 +86,30 @@ EPISODE_SCHEMA = {
             "narration": {"type": "string"},
             "visual_keywords": {"type": "array", "items": {"type": "string"}},
             "caption": {"type": "string"},
+            # === تعديل جديد: تلميحات نطق للأسماء الأجنبية ===
+            # الأسماء الأجنبية (مناطق/مدن/أشخاص) هي أكثر ما يخرج نطقه سيئًا
+            # وواضح إنه صوت آلي من edge-tts، لأنها من غير قاعدة صرفية عربية
+            # ثابتة. كل مدخل: "word" (الكلمة/العبارة الأجنبية كما وردت
+            # بالضبط في narration) و"phonetic" (نفس الكلمة بالحروف الأساسية
+            # نفسها + تشكيل كامل يوضح نطقها الصحيح، من غير أي حرف زيادة).
+            # يُطبَّق في generate_voice.py قبل التوليد الصوتي فقط، ولا يظهر
+            # في الترجمة/الكابشن.
+            "phonetic_hints": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "word": {"type": "string"},
+                        "phonetic": {"type": "string"},
+                    },
+                    "required": ["word", "phonetic"],
+                    "additionalProperties": False,
+                },
+            },
         },
         "required": [
             "title", "hook", "region", "narration",
-            "visual_keywords", "caption",
+            "visual_keywords", "caption", "phonetic_hints",
         ],
         "additionalProperties": False,
     },
@@ -274,20 +287,12 @@ def generate_episode() -> dict:
     print(f"🎬 الموديل: {MODEL} | reasoning_effort: {REASONING_EFFORT}")
 
     for attempt in range(1, MAX_ATTEMPTS + 1):
-        attempt_message = user_message
-        if attempt > 1:
-            attempt_message += (
-                "\n\nتصحيح إلزامي للمحاولة الحالية: الرد السابق كان أقصر من المطلوب. "
-                f"اكتب narration بين {MIN_NARRATION_WORDS} و{TARGET_WORDS + 120} كلمة؛ "
-                "لا تختصر الأحداث ولا تحذف التفاصيل الحسية. احسب الكلمات قبل إخراج JSON، "
-                "ولا تعتبر القصة مكتملة إذا كانت أقل من الحد الأدنى."
-            )
         completion = create_completion(
             client,
             model=MODEL,
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": attempt_message},
+                {"role": "user", "content": user_message},
             ],
             temperature=TEMPERATURE,
             max_completion_tokens=budget,
@@ -324,14 +329,6 @@ def generate_episode() -> dict:
             print(f"⚠️ محاولة {attempt}/{MAX_ATTEMPTS}: {last_error} — هعيد المحاولة...")
             continue
 
-        word_count = len(narration.split())
-        if word_count < MIN_NARRATION_WORDS:
-            last_error = f"النص قصير ({word_count} كلمة؛ المطلوب على الأقل {MIN_NARRATION_WORDS})"
-            print(f"⚠️ محاولة {attempt}/{MAX_ATTEMPTS}: {last_error} — هعيد المحاولة...")
-            continue
-        if word_count < TARGET_WORDS:
-            print(f"ℹ️ النص مقبول: {word_count} كلمة (الهدف الإرشادي {TARGET_WORDS})")
-
         if not episode.get("visual_keywords"):
             last_error = "حقل visual_keywords فاضي"
             print(f"⚠️ محاولة {attempt}/{MAX_ATTEMPTS}: {last_error} — هعيد المحاولة...")
@@ -359,3 +356,4 @@ if __name__ == "__main__":
     print(f"   المنطقة: {episode.get('region', 'غير محدد')}")
     print(f"   الهوك: {episode.get('hook', '')[:80]}")
     print(f"   كلمات البحث: {episode['visual_keywords']}")
+    print(f"   تلميحات النطق: {episode.get('phonetic_hints', [])}")
