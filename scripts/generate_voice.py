@@ -5,12 +5,24 @@
 - downloaded_clips/narration_with_music.mp3
 - downloaded_clips/narration.ass
 ويحدّث current_episode.json بالمسارات الجديدة.
+
+مزامنة الترجمة: بدل الاعتماد فقط على توقيت "WordBoundary" الذي يرجعه
+edge-tts ذاتيًا لكل جملة، ثم تجميعه يدويًا مع مدد السكتات بين الجمل (طريقة
+عرضة للانحراف التراكمي—أي خطأ بسيط في تقدير مدة جملة أو سكتة يتضخم مع كل
+جملة تالية)، يُشغَّل الآن Whisper (faster-whisper) على الصوت النهائي
+الكامل بعد تجميعه فعليًا، ويُطابَق ناتجه (توقيت حقيقي مبني على الموجة
+الصوتية الفعلية) مع كلمات القصة نفسها. هذا يزيل مصدر عدم اليقين بالكامل:
+Whisper "يسمع" الصوت الحقيقي المنشور فعلاً، بما فيه السكتات، فلا حاجة
+لحساب تراكمي يدوي لمواضعها. توقيت edge-tts الذاتي (القديم) يبقى فقط
+كخطة احتياطية إذا تعذّر تشغيل Whisper لأي سبب.
 """
 
 from __future__ import annotations
 
 import asyncio
+import difflib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -35,6 +47,12 @@ WORDS_PER_CAPTION_CHUNK = 4
 VIDEO_W = 1920
 VIDEO_H = 1080
 
+# نموذج Whisper المستخدم لمحاذاة الترجمة مع الصوت الفعلي (انظر
+# align_words_with_whisper أدناه). "base" اختيار متوازن بين السرعة
+# والدقة على معالج عادي؛ يمكن رفعه لـ "small" لدقة أعلى مقابل وقت أطول
+# عبر متغير البيئة WHISPER_MODEL.
+WHISPER_MODEL_SIZE = os.getenv("WHISPER_MODEL", "base")
+
 VOICE_AUDIO = CLIPS_DIR / "narration_voice.mp3"
 FINAL_AUDIO = CLIPS_DIR / "narration_with_music.mp3"
 SUBTITLES = CLIPS_DIR / "narration.ass"
@@ -49,10 +67,20 @@ _WORD_TOKEN_PATTERN = re.compile(r"[\w\u0600-\u06FF]+", re.UNICODE)
 # علامات تُحذف من النص المرئي فقط حتى يبدو طبيعيًا وغير آلي. نص الراوي
 # الأصلي يظل محتفظًا بها لأن edge-tts يستخدمها لصناعة الوقفات الصحيحة.
 DISPLAY_PUNCTUATION = str.maketrans(".,،؛:!?؟…-—_()[]{}\"«»/\\", " " * 23)
+
+# قاموس تشكيل انتقائي: كل كلمة هنا لها أكثر من قراءة ممكنة بلا تشكيل، لكن
+# قراءة واحدة منها فقط هي المسيطرة فعليًا في سياق سرد قصص الرعب — تمامًا
+# مثل مشكلة "زر" (زِرّ الضغط مقابل فعل الزيارة) في مشروع آخر: كلمة بلا
+# تشكيل ممكن يقرأها المحرك بمعنى مختلف تمامًا عن المقصود. أي كلمة يُضاف
+# تشكيلها هنا يجب أن يكون لها قراءة واحدة غالبة بوضوح في هذا السياق؛
+# كلمات فيها احتمالان متقاربان في الاستخدام الفعلي (مثل "قفل" بين "القُفْل"
+# كاسم و"قَفَلَ" كفعل، وكلاهما شائع بنفس القدر في السرد) استُبعدت عمدًا
+# حتى لا تفرض قراءة قد تكون خاطئة في نصف الحالات.
 HARD_WORDS_DIACRITICS = {
     "عدة": "عِدّة", "قلبه": "قَلْبه", "لعنة": "لَعنة", "مسكون": "مَسكون",
     "جثة": "جُثّة", "همس": "هَمْس", "أشباح": "أَشباح", "ظل": "ظِلّ",
     "رعب": "رُعب", "صرخة": "صَرخة",
+    "خطى": "خُطى", "شبح": "شَبَح", "صراخ": "صُراخ", "دفن": "دَفَن",
 }
 
 
@@ -179,6 +207,116 @@ def build_ass_header() -> str:
     )
 
 
+# ---------------------------------------------------------------------------
+# مزامنة الترجمة: محاذاة حقيقية بالصوت الفعلي (Whisper) — مع خطة احتياطية
+# ---------------------------------------------------------------------------
+
+def _build_word_events_from_edge_tts(segments: list[dict]) -> list[dict]:
+    """توقيت احتياطي فقط: يعتمد على "WordBoundary" الذي يرجعه edge-tts
+    لكل جملة على حدة، مجمّعًا يدويًا مع مدد السكتات المُدرَجة بينها. لا
+    يُستخدم إلا إذا تعذّرت محاذاة Whisper (انظر align_words_with_whisper)
+    — توقيت edge-tts الذاتي للعربية غير موثوق بما يكفي ليكون المصدر
+    الأساسي، خصوصًا مع تراكم خطأ كل جملة على التي بعدها."""
+    events: list[dict] = []
+    cumulative_seconds = 0.0
+    for segment in segments:
+        if segment["is_silence"]:
+            cumulative_seconds += segment["duration"]
+            continue
+        if segment["events"]:
+            for event in segment["events"]:
+                events.append({
+                    "text": strip_diacritics(event["text"]),
+                    "offset": cumulative_seconds + event["offset"] / 10_000_000,
+                    "duration": event["duration"] / 10_000_000,
+                })
+        else:
+            words = re.findall(r"\S+", segment["sentence"] or "")
+            per_word = segment["duration"] / max(len(words), 1)
+            for word_index, word in enumerate(words):
+                events.append({
+                    "text": strip_diacritics(word),
+                    "offset": cumulative_seconds + word_index * per_word,
+                    "duration": per_word,
+                })
+        cumulative_seconds += segment["duration"]
+    return events
+
+
+def align_words_with_whisper(audio_path: Path, script_words: list[str]) -> list[dict]:
+    """يحاذي script_words مع الصوت الفعلي المُنتَج باستخدام faster-whisper،
+    بدل الوثوق بتوقيت edge-tts الذاتي. النص المعروض/المستخدم دائمًا هو
+    script_words نفسها؛ ناتج Whisper (بلا تشكيل، وقد يحوي أخطاء تعرّف
+    بسيطة) يُستخدم فقط لاستخراج التوقيت الحقيقي، عبر مطابقة الفروقات
+    (difflib) بين الكلمتين بعد تطبيع كل منهما. أي كلمة من السكريبت لم
+    يتعرّف عليها Whisper بثقة تأخذ توقيتًا تقريبيًا من أقرب كلمتين
+    متطابقتين قبلها وبعدها، بدل أن تُفقد."""
+    from faster_whisper import WhisperModel
+
+    model = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8")
+    segments, _ = model.transcribe(
+        str(audio_path), language="ar", word_timestamps=True, vad_filter=False,
+    )
+
+    whisper_words: list[tuple[str, float, float]] = []
+    for segment in segments:
+        for w in (segment.words or []):
+            text = (w.word or "").strip()
+            if text:
+                whisper_words.append((text, float(w.start), float(w.end)))
+    if not whisper_words:
+        raise RuntimeError("Whisper لم يرجع أي توقيت على مستوى الكلمة")
+
+    def _norm(w: str) -> str:
+        return strip_diacritics(w).translate(DISPLAY_PUNCTUATION).strip().lower()
+
+    script_norm = [_norm(w) for w in script_words]
+    whisper_norm = [_norm(w) for w, _, _ in whisper_words]
+
+    matcher = difflib.SequenceMatcher(None, script_norm, whisper_norm, autojunk=False)
+    timings: list[dict | None] = [None] * len(script_words)
+    for _tag, i1, i2, j1, j2 in matcher.get_matching_blocks():
+        for k in range(i2 - i1):
+            if i1 + k >= len(script_words) or j1 + k >= len(whisper_words):
+                continue
+            _, start, end = whisper_words[j1 + k]
+            timings[i1 + k] = {
+                "text": script_words[i1 + k],
+                "offset": start,
+                "duration": max(end - start, 0.05),
+            }
+
+    known_indices = [i for i, t in enumerate(timings) if t is not None]
+    if not known_indices or len(known_indices) < len(script_words) * 0.5:
+        raise RuntimeError(
+            f"تطابق ضعيف جدًا: {len(known_indices)}/{len(script_words)} كلمة فقط"
+        )
+
+    for i in range(len(timings)):
+        if timings[i] is not None:
+            continue
+        prev_i = max((k for k in known_indices if k < i), default=None)
+        next_i = min((k for k in known_indices if k > i), default=None)
+        if prev_i is None:
+            base = timings[next_i]
+            offset = max(base["offset"] - 0.2 * (next_i - i), 0.0)
+        elif next_i is None:
+            base = timings[prev_i]
+            offset = base["offset"] + base["duration"] * (i - prev_i)
+        else:
+            prev_end = timings[prev_i]["offset"] + timings[prev_i]["duration"]
+            next_start = timings[next_i]["offset"]
+            span = max(next_start - prev_end, 0.05)
+            offset = prev_end + span * (i - prev_i) / (next_i - prev_i)
+        timings[i] = {"text": script_words[i], "offset": offset, "duration": 0.3}
+
+    print(
+        f"🎯 محاذاة Whisper: {len(known_indices)}/{len(script_words)} كلمة مطابقة مباشرة، "
+        f"{len(script_words) - len(known_indices)} بالتقريب"
+    )
+    return timings
+
+
 def synthesize_voice(voice_text: str) -> None:
     sentences = split_sentences(voice_text)
     if not sentences:
@@ -190,37 +328,23 @@ def synthesize_voice(voice_text: str) -> None:
     concat_filter = "".join(f"[{i}:a]" for i in range(len(segments))) + f"concat=n={len(segments)}:v=0:a=1[aout]"
     run(["ffmpeg", "-y", *inputs, "-filter_complex", concat_filter, "-map", "[aout]", "-c:a", "libmp3lame", "-b:a", "192k", str(VOICE_AUDIO)])
 
-    all_word_events = []
-    cumulative_seconds = 0.0
-    for segment in segments:
-        if segment["is_silence"]:
-            cumulative_seconds += segment["duration"]
-            continue
-        if segment["events"]:
-            for event in segment["events"]:
-                all_word_events.append({
-                    "offset": event["offset"] + int(cumulative_seconds * 10_000_000),
-                    "duration": event["duration"],
-                    "text": strip_diacritics(event["text"]),
-                })
-        else:
-            words = re.findall(r"\S+", segment["sentence"] or "")
-            per_word = segment["duration"] / max(len(words), 1)
-            for word_index, word in enumerate(words):
-                all_word_events.append({
-                    "offset": int((cumulative_seconds + word_index * per_word) * 10_000_000),
-                    "duration": int(per_word * 10_000_000),
-                    "text": strip_diacritics(word),
-                })
-        cumulative_seconds += segment["duration"]
+    # نفس ترتيب/شكل الكلمات المعروضة كما كانت قبل التعديل (بلا تشكيل،
+    # وبعلامات الترقيم لا تزال ملتصقة — two_lines() تحذفها وقت العرض).
+    display_words = strip_diacritics(voice_text).split()
+
+    try:
+        all_word_events = align_words_with_whisper(VOICE_AUDIO, display_words)
+    except Exception as exc:  # noqa: BLE001
+        print(f"⚠️ فشلت محاذاة Whisper ({exc}) — الرجوع لتوقيت edge-tts الافتراضي.")
+        all_word_events = _build_word_events_from_edge_tts(segments)
 
     if not all_word_events:
         sys.exit("❌ تعذر إنشاء توقيت الترجمة.")
     dialogue_lines = []
     for index in range(0, len(all_word_events), WORDS_PER_CAPTION_CHUNK):
         group = all_word_events[index:index + WORDS_PER_CAPTION_CHUNK]
-        start = group[0]["offset"] / 10_000_000
-        end = (group[-1]["offset"] + group[-1]["duration"]) / 10_000_000
+        start = group[0]["offset"]
+        end = group[-1]["offset"] + group[-1]["duration"]
         dialogue_lines.append(f"Dialogue: 0,{ass_time(start)},{ass_time(max(end, start + 0.25))},Caption,,0,0,0,,{two_lines([e['text'] for e in group])}")
     SUBTITLES.write_text(build_ass_header() + "\n".join(dialogue_lines) + "\n", encoding="utf-8")
     for segment in segments:
