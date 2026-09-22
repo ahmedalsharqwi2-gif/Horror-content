@@ -32,6 +32,16 @@
    BUFFER_INSTAGRAM_CHANNEL_ID نفسه متظبط في GitHub Secrets بمعرّف قناة
    انستجرام الصحيح — لو الـ secret ده مش موجود أصلًا، مفيش كود يقدر يعوّض
    عنه.
+4) يوتيوب كان بيرفض الفيديو الكامل برسالة:
+   "Video must be no longer than 3 minutes for YouTube Shorts." +
+   "Video must be vertical (portrait orientation) for YouTube Shorts."
+   رغم إن الفيديو أفقي فعلًا (تم التأكد من أبعاده قبل الرفع). السبب:
+   وجود هاشتاج #Shorts/#Short جوه نص البوست (منقول من caption الحلقة،
+   اللي بيتشارك بين الفيديو الكامل والشورتس) بيخلي يوتيوب يحاول يصنّف
+   الفيديو تلقائيًا كـ Short بغض النظر عن أبعاده الحقيقية، فيرفضه لما
+   يفشل شروط الـ Shorts. الحل: دالة strip_shorts_hashtag() بتشيل أي
+   هاشتاج #Shorts/#Short من نص البوست الخاص بالفيديو الكامل تحديدًا
+   (caption + hashtags المجمّعة) قبل إرساله لـ Buffer.
 """
 
 from __future__ import annotations
@@ -58,6 +68,22 @@ ENABLE_PREFLIGHT_CHECK = os.environ.get("ENABLE_PREFLIGHT_CHECK", "true").lower(
 
 FULL_TO_SHORT_1_HOURS = float(os.environ.get("FULL_TO_SHORT_1_HOURS", "3"))
 FULL_TO_SHORT_2_HOURS = float(os.environ.get("FULL_TO_SHORT_2_HOURS", "7"))
+
+# يوتيوب بيعامل أي فيديو نصّه فيه #Shorts/#Short كـ Short تلقائيًا بغض النظر
+# عن أبعاده الحقيقية. لازم نشيله من نص الفيديو الكامل حتى لا يُرفض برسالة
+# "Video must be no longer than 3 minutes / must be vertical for YouTube Shorts".
+SHORTS_HASHTAG_RE = re.compile(r"(?<!\w)#[Ss]hort[s]?\b")
+
+
+def strip_shorts_hashtag(text: str) -> str:
+    """يشيل أي هاشتاج #Shorts/#Short من نص الفيديو الكامل حتى لا يصنّفه
+    يوتيوب تلقائيًا كـ Short (سلوك معروف: وجود #Shorts في الوصف بيخلي
+    يوتيوب يحاول يعامل الفيديو كـ Short بغض النظر عن أبعاده الحقيقية)،
+    فيرفض الرفع بالخطأين:
+    "Video must be no longer than 3 minutes for YouTube Shorts."
+    "Video must be vertical (portrait orientation) for YouTube Shorts."
+    """
+    return SHORTS_HASHTAG_RE.sub("", text).strip()
 
 
 def build_channel_services() -> dict[str, str]:
@@ -189,7 +215,15 @@ def metadata_for(channel_id: str, asset_type: str, title: str) -> dict | None:
 def build_post_text(service: str, asset_type: str, title: str, caption: str, full_url: str | None = None) -> str:
     hashtags = " ".join(dict.fromkeys(re.findall(r"(?<!\w)#\S+", caption)))
     if asset_type == "full_video":
-        parts = [title.strip(), caption.strip()]
+        # مهم: نشيل #Shorts/#Short من كابشن ومن الهاشتاجات المجمّعة للفيديو
+        # الكامل، وإلا يوتيوب هيحاول يصنّفه Short ويرفضه لأنه أفقي وأطول
+        # من 3 دقايق (شوف strip_shorts_hashtag بالتفصيل في أعلى الملف).
+        clean_caption = strip_shorts_hashtag(caption)
+        clean_hashtags = strip_shorts_hashtag(hashtags)
+        parts = [title.strip(), clean_caption.strip()]
+        if clean_hashtags and clean_hashtags not in "\n".join(parts):
+            parts.append(clean_hashtags)
+        return "\n\n".join(part for part in parts if part).strip()
     elif service == "youtube":
         parts = [f"{title.strip()} — مقتطف", "عايز تعرف النهاية؟ شاهد الحلقة كاملة على YouTube."]
         if full_url:
