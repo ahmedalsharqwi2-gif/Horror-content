@@ -40,7 +40,16 @@ jobs:
           ffprobe -version
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: python -m pip install -r requirements.txt
+
+      # فشل الـ import هنا صامت لو حصل من غير السطر ده — pip منفصل عن
+      # "python -m pip" ممكن يثبّت الحزم على تفسير Python مختلف عن اللي
+      # بيشغّل main.py فعليًا، فيرجع realign_subtitles_with_whisper()
+      # بصمت لتوقيتات edge-tts الأقل دقة (سبب عدم تزامن الترجمة اللي
+      # ظهر قبل كده). السطر ده بيفشل الـ run فورًا وبوضوح لو تكرر نفس
+      # الخطأ، بدل ما يتخبى جوه try/except ويكمّل بجودة أقل من غير تنبيه.
+      - name: Verify faster-whisper is importable on the same interpreter
+        run: python -c "import faster_whisper; print('faster-whisper OK:', faster_whisper.__file__)"
 
       - name: Generate complete episode script
         env:
