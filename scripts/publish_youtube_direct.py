@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from google.auth.transport.requests import Request
@@ -48,6 +48,13 @@ SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 YT_CATEGORY_ID = os.environ.get("YT_CATEGORY_ID", "24")
 YT_PRIVACY = os.environ.get("YT_PRIVACY", "public")  # public | unlisted | private
 YT_MADE_FOR_KIDS = os.environ.get("YT_MADE_FOR_KIDS", "false").lower() == "true"
+# الفيديو الطويل أداؤه أفضل مساءً (وقت فراغ فعلي عند المشاهد) بعكس
+# الشورتس اللي أداؤها أفضل صبحًا/ضهرًا. لو الـ workflow بيشتغل صباحًا،
+# القيمة دي بتأجل النشر الفعلي على يوتيوب لنفس اليوم مساءً بدل النشر
+# الفوري وقت الرفع — بنفس منطق FULL_VIDEO_DELAY_HOURS في
+# publish_buffer.py، ولازم تتظبط بنفس القيمة عشان يوتيوب وباقي المنصات
+# ينشروا في نفس التوقيت تقريبًا.
+FULL_VIDEO_DELAY_HOURS = float(os.environ.get("FULL_VIDEO_DELAY_HOURS", "0"))
 
 
 def load_credentials() -> Credentials:
@@ -115,16 +122,25 @@ def load_title_and_description() -> tuple[str, str]:
 
 
 def upload_video(youtube, video_path: Path, title: str, description: str) -> str:
+    status: dict = {"selfDeclaredMadeForKids": YT_MADE_FOR_KIDS}
+    if FULL_VIDEO_DELAY_HOURS > 0:
+        # جدولة نشر مؤجَّلة: يوتيوب بيطلب privacyStatus="private" مع
+        # publishAt (ISO 8601)، وبيحوّل الفيديو تلقائيًا لـpublic في
+        # الموعد المحدد بالظبط — الفيديو مش هيكون مرئي لحد ده الموعد.
+        publish_at = (datetime.now(timezone.utc) + timedelta(hours=FULL_VIDEO_DELAY_HOURS))
+        status["privacyStatus"] = "private"
+        status["publishAt"] = publish_at.isoformat(timespec="seconds").replace("+00:00", "Z")
+        print(f"⏰ الفيديو مجدول ينشر تلقائيًا عند: {status['publishAt']} UTC")
+    else:
+        status["privacyStatus"] = YT_PRIVACY
+
     body = {
         "snippet": {
             "title": title or "Horror Episode",
             "description": description,
             "categoryId": YT_CATEGORY_ID,
         },
-        "status": {
-            "privacyStatus": YT_PRIVACY,
-            "selfDeclaredMadeForKids": YT_MADE_FOR_KIDS,
-        },
+        "status": status,
     }
     media = MediaFileUpload(
         str(video_path),
