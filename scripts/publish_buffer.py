@@ -206,9 +206,14 @@ def metadata_for(channel_id: str, asset_type: str, title: str) -> dict | None:
         # قيم Facebook الرسمية هي post / reel / story؛ لا توجد قيمة video.
         return {"facebook": {"type": "reel" if asset_type == "short" else "post"}}
     if service == "instagram":
-        # "post" = فيديو Feed عادي للحلقة الكاملة، "reel" للشورتس. "video"
-        # مش قيمة صحيحة في enum PostType (شوف الشرح في أعلى الملف).
-        return {"instagram": {"type": "reel" if asset_type == "short" else "post", "shouldShareToFeed": True}}
+        # كل الفيديوهات (الكامل والشورتس) بتتبعت كـ"reel" — لا "post"،
+        # لأن نوع "post" عند Buffer بيفرض حد قديم 60 ثانية لفيديوهات
+        # Instagram (رسالة الخطأ: "Video must be no longer than 1 minute
+        # for Instagram Posts")، بينما Instagram Graph API الرسمي بيسمح
+        # بحد 15 دقيقة (900 ثانية) لـReels — والفيديو الكامل (~6 دقايق)
+        # داخل الحد ده براحة. shouldShareToFeed=True بيخلي الـreel يظهر
+        # في الـFeed العادي كمان زي منشور فيديو تقليدي.
+        return {"instagram": {"type": "reel", "shouldShareToFeed": True}}
     return None
 
 
