@@ -68,6 +68,13 @@ ENABLE_PREFLIGHT_CHECK = os.environ.get("ENABLE_PREFLIGHT_CHECK", "true").lower(
 
 FULL_TO_SHORT_1_HOURS = float(os.environ.get("FULL_TO_SHORT_1_HOURS", "3"))
 FULL_TO_SHORT_2_HOURS = float(os.environ.get("FULL_TO_SHORT_2_HOURS", "7"))
+# الفيديو الكامل (طويل) أداؤه أفضل مساءً لما المشاهد يكون عنده وقت فراغ
+# فعلي، بعكس الشورتس اللي أداؤها أفضل صبحًا/ضهرًا أثناء تصفّح سريع —
+# فمش منطقي ينشر الفيديو الكامل فورًا وقت التشغيل (صباحًا عادة) زي ما
+# كان قديمًا (تأخير=0). القيمة الافتراضية هنا بتفترض تشغيل الـ workflow
+# صباحًا وتؤجل النشر الفعلي لنفس اليوم مساءً؛ لو غيّرت معاد الـ cron،
+# اضبط القيمة دي معاه.
+FULL_VIDEO_DELAY_HOURS = float(os.environ.get("FULL_VIDEO_DELAY_HOURS", "0"))
 
 # يوتيوب بيعامل أي فيديو نصّه فيه #Shorts/#Short كـ Short تلقائيًا بغض النظر
 # عن أبعاده الحقيقية. لازم نشيله من نص الفيديو الكامل حتى لا يُرفض برسالة
@@ -331,7 +338,7 @@ def main() -> None:
     for service in set(services.values()):
         full_urls[service] = os.environ.get(f"FULL_VIDEO_URL_{service.upper()}", "").strip() or None
 
-    assets: list[tuple[str, Path, float]] = [("full_video", full_path, 0.0)]
+    assets: list[tuple[str, Path, float]] = [("full_video", full_path, FULL_VIDEO_DELAY_HOURS)]
     short_numbers = sorted({int(p.stem.split("_")[1]) for p in shorts})
     for number in short_numbers:
         delay = FULL_TO_SHORT_1_HOURS if number == 1 else FULL_TO_SHORT_2_HOURS
