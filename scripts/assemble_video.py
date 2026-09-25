@@ -6,11 +6,10 @@ assemble_video.py
 1) فيديو كامل أفقي 16:9:
    output/final_video_full.mp4
 
-2) شورتس رأسية 9:16، مقتطفة من الفيديو الكامل وتتوقف قبل النهاية/الحل:
+2) ريل رأسي واحد 9:16، مقتطف من أول الفيديو الكامل ويتوقف قبل النهاية/الحل:
    output/short_1_youtube.mp4
    output/short_1_facebook.mp4
    output/short_1_instagram.mp4
-   ...
 
 مصدر الحقيقة للصوت والترجمة هو current_episode.json. يدعم الملف الحقول الجديدة:
 
@@ -18,15 +17,24 @@ assemble_video.py
   "final_audio": "downloaded_clips/narration_with_music.mp3",
   "subtitles": "downloaded_clips/narration.ass",
   "shorts": [
-    {"start_seconds": 0, "end_seconds": 75},
-    {"start_seconds": 80, "end_seconds": 145}
+    {"start_seconds": 0, "end_seconds": 75}
   ]
 }
 
-إذا لم توجد قائمة shorts، يتم إنشاء شورتين تلقائيًا من بداية/منتصف الفيديو،
+إذا لم توجد قائمة shorts، يتم إنشاء ريل واحد تلقائيًا من أول الفيديو،
 مع ترك AUTO_END_MARGIN_SECONDS في نهاية الحلقة حتى لا يصل المقتطف إلى الحل.
 
-مهم: مدة 90 ثانية حد للشورتس فقط، وليست حدًا للفيديو الكامل.
+مهم: مدة 90 ثانية حد للريل فقط، وليست حدًا للفيديو الكامل.
+
+=== التنويه (CTA) في نهاية الريل ===
+- خط ونوع وحجم التنويه بيتقرأ تلقائيًا من ستايل ترجمة السكربت نفسها
+  (الـ [V4+ Styles] في ملف subtitles الخاص بالحلقة)، عن طريق
+  extract_subtitle_style()، بدل ما يكون مثبّت يدويًا. لو تغيّر خط
+  السكربت في generate_voice.py، التنويه هيتابعه تلقائيًا من غير أي
+  تعديل هنا.
+- التنويه بيتحط أعلى الشاشة (Alignment=8, top-center) بعيد تمامًا عن
+  مكان ترجمة السكربت (اللي بتبقى عادةً في أسفل الفيديو)، عشان الاتنين
+  ميتلخبطوش فوق بعض على نفس المساحة.
 """
 
 from __future__ import annotations
@@ -49,19 +57,22 @@ EPISODE_PATH = STATE_DIR / "current_episode.json"
 FULL_WIDTH = 1920
 FULL_HEIGHT = 1080
 
-# الشورتس: رأسي 9:16
+# الريل: رأسي 9:16 — واحد فقط، من أول الفيديو
 SHORT_WIDTH = 1080
 SHORT_HEIGHT = 1920
 MAX_SHORT_DURATION_SECONDS = 90.0
-DEFAULT_SHORT_COUNT = 2
 AUTO_END_MARGIN_SECONDS = 8.0
 CTA_DURATION_SECONDS = 4.0
 FPS = 24
 
+# خط/حجم افتراضي يُستخدم فقط لو تعذّرت قراءة ستايل السكربت من ملف الترجمة.
+FALLBACK_CTA_FONT = "Arial"
+FALLBACK_CTA_SIZE = 62
+
 PLATFORM_CTA = {
-    "youtube": "عايز تعرف النهاية؟\nشاهد الحلقة كاملة على YouTube",
-    "facebook": "عايز تعرف النهاية؟\nشاهد الحلقة كاملة على صفحتنا",
-    "instagram": "عايز تعرف النهاية؟\nالحلقة كاملة على صفحتنا",
+    "youtube": "لو عايز تتفرج على باقي الفيديو\nشوفه كامل على القناة",
+    "facebook": "لو عايز تتفرج على باقي الفيديو\nشوفه كامل على الصفحة",
+    "instagram": "لو عايز تتفرج على باقي الفيديو\nشوفه كامل على الصفحة",
 }
 
 
@@ -148,6 +159,56 @@ def subtitle_filter(subtitles: Path | None) -> str | None:
     return f"subtitles='{path}'"
 
 
+def extract_subtitle_style(ass_path: Path | None) -> tuple[str, int]:
+    """يقرأ اسم الخط وحجمه من أول Style معرّف في ملف ترجمة السكربت
+    (قسم [V4+ Styles])، عشان تنويه الريل (CTA) يستخدم نفس خط وحجم
+    ترجمة الفيديو نفسها تلقائيًا مهما تغيّر إعداد الخط في
+    generate_voice.py مستقبلًا، بدل تثبيت قيمة يدوية هنا قد تختلف عن
+    الخط الفعلي المستخدم في الفيديو.
+    """
+    if not ass_path or not ass_path.exists():
+        return FALLBACK_CTA_FONT, FALLBACK_CTA_SIZE
+
+    try:
+        text = ass_path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return FALLBACK_CTA_FONT, FALLBACK_CTA_SIZE
+
+    in_styles = False
+    format_fields: list[str] = []
+    first_style: tuple[str, int] | None = None
+    default_style: tuple[str, int] | None = None
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if line.startswith("[") and not line.startswith("[V4"):
+            in_styles = False
+            continue
+        if line.startswith("[V4+ Styles]") or line.startswith("[V4 Styles]"):
+            in_styles = True
+            continue
+        if not in_styles:
+            continue
+        if line.startswith("Format:"):
+            format_fields = [f.strip() for f in line[len("Format:"):].split(",")]
+            continue
+        if line.startswith("Style:") and format_fields:
+            values = [v.strip() for v in line[len("Style:"):].split(",")]
+            row = dict(zip(format_fields, values))
+            try:
+                font_name = row.get("Fontname") or FALLBACK_CTA_FONT
+                font_size = int(float(row.get("Fontsize", FALLBACK_CTA_SIZE)))
+            except (TypeError, ValueError):
+                continue
+            if first_style is None:
+                first_style = (font_name, font_size)
+            if row.get("Name") == "Default":
+                default_style = (font_name, font_size)
+
+    chosen = default_style or first_style
+    return chosen or (FALLBACK_CTA_FONT, FALLBACK_CTA_SIZE)
+
+
 def add_audio_and_subtitles(
     video_path: Path,
     final_audio: Path,
@@ -210,8 +271,20 @@ def build_full_video(
     return probe_duration(output_path)
 
 
-def write_cta_ass(path: Path, start: float, end: float, text: str) -> None:
-    """ينشئ Overlay ASS عربيًا بدل drawtext لتفادي مشاكل تشكيل العربية."""
+def write_cta_ass(
+    path: Path,
+    start: float,
+    end: float,
+    text: str,
+    font_name: str,
+    font_size: int,
+) -> None:
+    """ينشئ Overlay ASS عربيًا بدل drawtext لتفادي مشاكل تشكيل العربية.
+
+    التنويه بيتحط أعلى الشاشة (Alignment=8: top-center) بدل أسفلها،
+    عشان يبقى في منطقة منفصلة تمامًا عن ترجمة السكربت المحروقة أصلًا
+    في الفيديو (واللي عادةً بتبقى في أسفل الإطار)، فمايحصلش تداخل بينهم.
+    """
     def ass_time(seconds: float) -> str:
         centiseconds = max(0, int(round(seconds * 100)))
         hours, rem = divmod(centiseconds, 360000)
@@ -232,9 +305,10 @@ def write_cta_ass(path: Path, start: float, end: float, text: str) -> None:
         "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
         "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
         "Alignment, MarginL, MarginR, MarginV, Encoding\n"
-        # أبيض مع خلفية شبه شفافة، أسفل/منتصف الشاشة.
-        "Style: CTA,Arial,62,&H00FFFFFF,&H00FFFFFF,&H00101010,&H99000000,"
-        "1,0,0,0,100,100,0,0,1,4,1,2,70,70,180,1\n\n"
+        # أبيض مع خلفية شبه شفافة. Alignment=8 يعني أعلى ومنتصف الشاشة —
+        # بعيد عن ترجمة السكربت (أسفل الشاشة عادةً)، وMarginV مسافته من أعلى.
+        f"Style: CTA,{font_name},{font_size},&H00FFFFFF,&H00FFFFFF,&H00101010,&H99000000,"
+        "1,0,0,0,100,100,0,0,1,4,1,8,70,70,90,1\n\n"
         "[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, "
         "Effect, Text\n"
@@ -244,21 +318,13 @@ def write_cta_ass(path: Path, start: float, end: float, text: str) -> None:
 
 
 def default_short_specs(full_duration: float) -> list[dict]:
-    """ينشئ شورتين تلقائيًا ويترك هامشًا قبل نهاية القصة."""
+    """ينشئ ريل واحد فقط من أول الفيديو، ويترك هامشًا قبل نهاية القصة
+    حتى لا يصل المقتطف إلى الحل."""
     usable_end = max(1.0, full_duration - AUTO_END_MARGIN_SECONDS)
-    if usable_end <= 1:
-        return [{"start_seconds": 0.0, "end_seconds": min(full_duration, MAX_SHORT_DURATION_SECONDS)}]
-
-    count = DEFAULT_SHORT_COUNT
-    window = min(MAX_SHORT_DURATION_SECONDS, usable_end / count)
-    specs = []
-    for index in range(count):
-        start = index * (usable_end / count)
-        end = min(start + window, usable_end)
-        if end - start < 1:
-            continue
-        specs.append({"start_seconds": start, "end_seconds": end})
-    return specs
+    window = min(MAX_SHORT_DURATION_SECONDS, usable_end)
+    if window < 1:
+        window = min(full_duration, MAX_SHORT_DURATION_SECONDS)
+    return [{"start_seconds": 0.0, "end_seconds": window}]
 
 
 def load_short_specs(episode: dict, full_duration: float) -> list[dict]:
@@ -281,7 +347,9 @@ def load_short_specs(episode: dict, full_duration: float) -> list[dict]:
         if end - start >= 1.0:
             specs.append({"start_seconds": start, "end_seconds": end})
 
-    return specs or default_short_specs(full_duration)
+    # نستخدم أول ريل معرّف بس (ريل واحد)، حتى لو كان فيه أكتر من عنصر
+    # في current_episode.json من نسخة قديمة.
+    return specs[:1] or default_short_specs(full_duration)
 
 
 def create_short(
@@ -290,16 +358,18 @@ def create_short(
     short_index: int,
     platform: str,
     output_path: Path,
+    font_name: str,
+    font_size: int,
 ) -> float:
     start = float(spec["start_seconds"])
     end = float(spec["end_seconds"])
     duration = min(end - start, MAX_SHORT_DURATION_SECONDS)
     if duration <= 0:
-        raise ValueError("مدة الشورت يجب أن تكون أكبر من صفر")
+        raise ValueError("مدة الريل يجب أن تكون أكبر من صفر")
 
     cta_start = max(0.0, duration - CTA_DURATION_SECONDS)
     cta_ass = CLIPS_DIR / f"cta_short_{short_index}_{platform}.ass"
-    write_cta_ass(cta_ass, cta_start, duration, PLATFORM_CTA[platform])
+    write_cta_ass(cta_ass, cta_start, duration, PLATFORM_CTA[platform], font_name, font_size)
     cta_filter = subtitle_filter(cta_ass)
 
     # crop مركزي من 16:9 إلى 9:16، مع الإبقاء على صوت الفيديو الكامل.
@@ -367,6 +437,10 @@ def main() -> None:
         print(f"⚠️ ملف الترجمة غير موجود؛ سيتم إنتاج الفيديو بدون ترجمة: {subtitles}")
         subtitles = None
 
+    # خط/حجم التنويه (CTA) في الريل بياخده تلقائيًا من ستايل ترجمة السكربت.
+    cta_font_name, cta_font_size = extract_subtitle_style(subtitles)
+    print(f"ℹ️ خط التنويه (CTA) سيطابق خط السكربت: {cta_font_name}, {cta_font_size}pt")
+
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     CLIPS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -382,23 +456,26 @@ def main() -> None:
     print(f"✅ مدة الفيديو الكامل: {full_duration:.1f} ثانية")
 
     specs = load_short_specs(episode, full_duration)
-    print(f"✅ عدد الشورتس: {len(specs)} — الحد الأقصى لكل شورت: {MAX_SHORT_DURATION_SECONDS:.0f}s")
+    print(f"✅ عدد الريلز: {len(specs)} — الحد الأقصى: {MAX_SHORT_DURATION_SECONDS:.0f}s")
 
     generated = 0
     for short_index, spec in enumerate(specs, 1):
         for platform in PLATFORM_CTA:
             output = OUTPUT_DIR / f"short_{short_index}_{platform}.mp4"
-            duration = create_short(full_output, spec, short_index, platform, output)
+            duration = create_short(
+                full_output, spec, short_index, platform, output,
+                cta_font_name, cta_font_size,
+            )
             generated += 1
             print(
-                f"✅ شورت {short_index} / {platform}: {output} "
-                f"({duration:.1f}s، يتوقف قبل نهاية القصة)"
+                f"✅ ريل {short_index} / {platform}: {output} "
+                f"({duration:.1f}s، من أول الفيديو، يتوقف قبل نهاية القصة)"
             )
 
     if generated == 0:
-        sys.exit("❌ لم يتم إنشاء أي شورت.")
+        sys.exit("❌ لم يتم إنشاء أي ريل.")
 
-    print("✅ اكتمل إنتاج الفيديو الكامل والشورتس لجميع المنصات.")
+    print("✅ اكتمل إنتاج الفيديو الكامل والريل لجميع المنصات.")
 
 
 if __name__ == "__main__":
