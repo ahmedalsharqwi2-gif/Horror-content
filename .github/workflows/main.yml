@@ -4,19 +4,13 @@ on:
   schedule:
     # الـ workflow بيتشغّل الساعة 08:00 UTC (11ص القاهرة، UTC+3) —
     # ده معاد بدء التوليد بس، مش معاد النشر الفعلي؛ النشر نفسه مجدول
-    # (dueAt عند Buffer، publishAt عند يوتيوب) على مواعيد منفصلة تحت.
+    # (dueAt عند Buffer، publishAt عند يوتيوب) على معاد واحد تحت.
     #
-    # حسب دراسات نشر عامة (Buffer/Hopper HQ 2026 — لا توجد بيانات خاصة
-    # بجمهور عربي تحديدًا، راجع تحليلات قناتك بعد فترة لتدقيق المواعيد):
-    # الفيديو الطويل أداؤه أفضل مساءً (7-10م، وقت فراغ فعلي)، والشورتس
-    # أداؤها أفضل صبحًا/ضهرًا (ذروة أساسية 11ص-12ظ، ثانوية ~4ع) أثناء
-    # تصفّح سريع. فالجدولة الفعلية (FULL_VIDEO_DELAY_HOURS /
-    # FULL_TO_SHORT_*_HOURS في خطوة النشر تحت) بتخلي:
-    #   • الفيديو الكامل ينشر نفس اليوم الساعة ~7م (تأخير 8 ساعات)
-    #   • short_1 ينشر اليوم التالي صباحًا ~11ص (تأخير 24 ساعة)
-    #   • short_2 ينشر اليوم التالي عصرًا ~4ع (تأخير 29 ساعة)
-    # وبالتالي الشورتس بتوصل بعد ما الفيديو الكامل يكون منشورًا بالفعل،
-    # فتفضل تأدي دورها كتشويق له.
+    # التحديث الجديد: الفيديو الكامل والريل الواحد (المأخوذ من أول
+    # الحلقة) بينشروا مع بعض في نفس اللحظة، مساءً الساعة ~7م (تأخير 8
+    # ساعات من وقت تشغيل الـ workflow صباحًا). لم يعد هناك short_2 ولا
+    # جدولة منفصلة للشورت — كل الأصول (الفيديو + الريل على كل منصة)
+    # تستخدم نفس FULL_VIDEO_DELAY_HOURS.
     - cron: "0 8 * * *"
   workflow_dispatch:
 
@@ -80,10 +74,10 @@ jobs:
       - name: Generate complete narration and landscape subtitles
         run: python scripts/generate_voice.py
 
-      - name: Assemble full landscape video and platform shorts
+      - name: Assemble full landscape video and single vertical reel
         run: python scripts/assemble_video.py
 
-      - name: Publish full video first, then shorts
+      - name: Publish full video and reel together
         env:
           BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
           BUFFER_CHANNEL_ID: ${{ secrets.BUFFER_CHANNEL_ID }}
@@ -91,9 +85,9 @@ jobs:
           BUFFER_FACEBOOK_CHANNEL_ID: ${{ secrets.BUFFER_FACEBOOK_CHANNEL_ID }}
           BUFFER_INSTAGRAM_CHANNEL_ID: ${{ secrets.BUFFER_INSTAGRAM_CHANNEL_ID }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # نفس القيمة تُستخدم للفيديو الكامل وللريل معًا، عشان ينشروا
+          # سوا الساعة ~7م. غيّرها هنا لو غيّرت معاد الـ cron فوق.
           FULL_VIDEO_DELAY_HOURS: "8"
-          FULL_TO_SHORT_1_HOURS: "24"
-          FULL_TO_SHORT_2_HOURS: "29"
           CHANNEL_PENDING_LIMIT: "10"
         run: python scripts/publish_buffer.py
 
@@ -101,7 +95,7 @@ jobs:
       # YouTube Shorts فقط، لذلك الفيديو الكامل يُنشر ليوتيوب هنا بشكل
       # منفصل عبر YouTube Data API مباشرة (شوف publish_youtube_direct.py).
       # FULL_VIDEO_DELAY_HOURS لازم تكون نفس قيمة الخطوة اللي فاتت، عشان
-      # يوتيوب ينشر في نفس توقيت باقي المنصات مساءً بدل النشر الفوري.
+      # يوتيوب ينشر في نفس توقيت باقي المنصات (والريل) مساءً.
       - name: Publish full video directly to YouTube
         env:
           YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
