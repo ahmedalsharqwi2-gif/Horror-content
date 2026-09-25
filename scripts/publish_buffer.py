@@ -1,9 +1,9 @@
 """نشر أصول الحلقة الجديدة عبر Buffer.
 
 الترتيب:
-- الفيديو الكامل الأفقي أولًا.
-- short_1 بعد FULL_TO_SHORT_1_HOURS (افتراضيًا 3 ساعات).
-- short_2 بعد FULL_TO_SHORT_2_HOURS (افتراضيًا 7 ساعات).
+- الفيديو الكامل الأفقي.
+- ريل واحد فقط (مأخوذ من أول الحلقة)، ينشر في نفس لحظة الفيديو الكامل
+  (نفس FULL_VIDEO_DELAY_HOURS) بدل ما يتأخر عنه — الاتنين ينشروا مع بعض.
 
 لا يوجد هنا منطق part1/part2. كل أصل يرفع وينشر Native على كل قناة.
 
@@ -13,7 +13,7 @@
    موجود بس في نوع الـ output (`YoutubePostMetadata`) اللي بيوصف حالة
    البوست بعد النشر، مش نوع الـ input اللي بنستخدمه وقت الإنشاء. إرساله
    كان بيرجّع "Field 'type' is not defined by type 'YoutubePostMetadataInput'"
-   لكل الأصول (الفيديو الكامل + الشورتس) بنفس الرسالة بالظبط. الحل: حذف
+   لكل الأصول (الفيديو الكامل + الريل) بنفس الرسالة بالظبط. الحل: حذف
    الحقل من فرع يوتيوب خالص. يوتيوب بيحدد تلقائيًا لو الفيديو "Short" من
    مواصفات الملف نفسه (نسبة أبعاد رأسية/مربعة + مدة قصيرة)، مش من أي حقل
    بتبعته لـ Buffer.
@@ -21,7 +21,7 @@
    وقيمه المسموحة (enum PostType) هي: post, reel, story, short, carousel,
    event, offer, ghost_post, thread, whats_new — القيمة "video" مش من
    ضمنهم، فكانت هترجع خطأ enum مشابه لو اتبعتت فعلًا. الحل: "post"
-   للفيديو الكامل (فيديو Feed عادي)، و"reel" للشورتس (زي ما هو).
+   للفيديو الكامل (فيديو Feed عادي)، و"reel" للريل (زي ما هو).
 3) انستجرام كان مش بيتنشرله خالص (ولا حتى محاولة فاشلة في اللوج) لأن
    channel_ids() كانت بتعتمد على متغير BUFFER_CHANNEL_ID المنفصل، ولو
    القيمة دي متظبطة يدويًا وناقص منها معرّف انستجرام، بيرجع بس يوتيوب/
@@ -37,11 +37,19 @@
    "Video must be vertical (portrait orientation) for YouTube Shorts."
    رغم إن الفيديو أفقي فعلًا (تم التأكد من أبعاده قبل الرفع). السبب:
    وجود هاشتاج #Shorts/#Short جوه نص البوست (منقول من caption الحلقة،
-   اللي بيتشارك بين الفيديو الكامل والشورتس) بيخلي يوتيوب يحاول يصنّف
+   اللي بيتشارك بين الفيديو الكامل والريل) بيخلي يوتيوب يحاول يصنّف
    الفيديو تلقائيًا كـ Short بغض النظر عن أبعاده الحقيقية، فيرفضه لما
    يفشل شروط الـ Shorts. الحل: دالة strip_shorts_hashtag() بتشيل أي
    هاشتاج #Shorts/#Short من نص البوست الخاص بالفيديو الكامل تحديدًا
    (caption + hashtags المجمّعة) قبل إرساله لـ Buffer.
+
+=== تحديث الجدولة (ريل واحد بدل اتنين) ===
+كان فيه short_1 و short_2 بفارق زمني بينهم وبين الفيديو الكامل. دلوقتي
+assemble_video.py بينتج ريل واحد بس (مأخوذ من أول الحلقة)، وده بينشر في
+نفس لحظة الفيديو الكامل (نفس FULL_VIDEO_DELAY_HOURS) بدل ما يتأخر عنه —
+عشان الاتنين يوصلوا الجمهور مع بعض الساعة اللي محددها المستخدم (~7م).
+متغيرات FULL_TO_SHORT_1_HOURS / FULL_TO_SHORT_2_HOURS اتشالت خالص —
+لم يعد هناك حاجة لهم.
 """
 
 from __future__ import annotations
@@ -66,14 +74,11 @@ RELEASE_TAG = "media-assets"
 CHANNEL_PENDING_LIMIT = int(os.environ.get("CHANNEL_PENDING_LIMIT", "10"))
 ENABLE_PREFLIGHT_CHECK = os.environ.get("ENABLE_PREFLIGHT_CHECK", "true").lower() != "false"
 
-FULL_TO_SHORT_1_HOURS = float(os.environ.get("FULL_TO_SHORT_1_HOURS", "3"))
-FULL_TO_SHORT_2_HOURS = float(os.environ.get("FULL_TO_SHORT_2_HOURS", "7"))
 # الفيديو الكامل (طويل) أداؤه أفضل مساءً لما المشاهد يكون عنده وقت فراغ
-# فعلي، بعكس الشورتس اللي أداؤها أفضل صبحًا/ضهرًا أثناء تصفّح سريع —
-# فمش منطقي ينشر الفيديو الكامل فورًا وقت التشغيل (صباحًا عادة) زي ما
-# كان قديمًا (تأخير=0). القيمة الافتراضية هنا بتفترض تشغيل الـ workflow
-# صباحًا وتؤجل النشر الفعلي لنفس اليوم مساءً؛ لو غيّرت معاد الـ cron،
-# اضبط القيمة دي معاه.
+# فعلي. القيمة الافتراضية هنا بتفترض تشغيل الـ workflow صباحًا وتؤجل
+# النشر الفعلي لنفس اليوم مساءً؛ لو غيّرت معاد الـ cron، اضبط القيمة دي
+# معاه. الريل الوحيد بيستخدم نفس القيمة بالظبط عشان ينشر مع الفيديو
+# الكامل في نفس اللحظة.
 FULL_VIDEO_DELAY_HOURS = float(os.environ.get("FULL_VIDEO_DELAY_HOURS", "0"))
 
 # يوتيوب بيعامل أي فيديو نصّه فيه #Shorts/#Short كـ Short تلقائيًا بغض النظر
@@ -213,7 +218,7 @@ def metadata_for(channel_id: str, asset_type: str, title: str) -> dict | None:
         # قيم Facebook الرسمية هي post / reel / story؛ لا توجد قيمة video.
         return {"facebook": {"type": "reel" if asset_type == "short" else "post"}}
     if service == "instagram":
-        # كل الفيديوهات (الكامل والشورتس) بتتبعت كـ"reel" — لا "post"،
+        # كل الفيديوهات (الكامل والريل) بتتبعت كـ"reel" — لا "post"،
         # لأن نوع "post" عند Buffer بيفرض حد قديم 60 ثانية لفيديوهات
         # Instagram (رسالة الخطأ: "Video must be no longer than 1 minute
         # for Instagram Posts")، بينما Instagram Graph API الرسمي بيسمح
@@ -237,15 +242,15 @@ def build_post_text(service: str, asset_type: str, title: str, caption: str, ful
             parts.append(clean_hashtags)
         return "\n\n".join(part for part in parts if part).strip()
     elif service == "youtube":
-        parts = [f"{title.strip()} — مقتطف", "عايز تعرف النهاية؟ شاهد الحلقة كاملة على YouTube."]
+        parts = [f"{title.strip()} — مقتطف", "عايز تشوف باقي الحلقة؟ شاهدها كاملة على YouTube."]
         if full_url:
             parts.append(f"🔗 الحلقة الكاملة: {full_url}")
     elif service == "facebook":
-        parts = [f"{title.strip()} — مقتطف", "عايز تعرف النهاية؟ شاهد الحلقة كاملة على صفحتنا."]
+        parts = [f"{title.strip()} — مقتطف", "عايز تشوف باقي الحلقة؟ شاهدها كاملة على صفحتنا."]
         if full_url:
             parts.append(f"🔗 الحلقة الكاملة: {full_url}")
     else:
-        parts = [f"{title.strip()} — مقتطف", "عايز تعرف النهاية؟ الحلقة كاملة على صفحتنا."]
+        parts = [f"{title.strip()} — مقتطف", "عايز تشوف باقي الحلقة؟ الحلقة كاملة على صفحتنا."]
     if hashtags and hashtags not in "\n".join(parts):
         parts.append(hashtags)
     return "\n\n".join(part for part in parts if part).strip()
@@ -314,8 +319,8 @@ def main() -> None:
 
     shorts = sorted(OUTPUT_DIR.glob("short_*_*.mp4"))
     if not shorts:
-        sys.exit("لا توجد شورتس جاهزة للنشر.")
-    # ترتيب ثابت: short_1 ثم short_2، وداخل كل رقم المنصات.
+        sys.exit("لا يوجد ريل جاهز للنشر.")
+    # ترتيب ثابت حسب المنصة.
     shorts = sorted(shorts, key=lambda p: (int(p.stem.split("_")[1]), p.stem))
 
     ids = channel_ids()
@@ -338,16 +343,15 @@ def main() -> None:
     for service in set(services.values()):
         full_urls[service] = os.environ.get(f"FULL_VIDEO_URL_{service.upper()}", "").strip() or None
 
-    assets: list[tuple[str, Path, float]] = [("full_video", full_path, FULL_VIDEO_DELAY_HOURS)]
-    short_numbers = sorted({int(p.stem.split("_")[1]) for p in shorts})
-    for number in short_numbers:
-        delay = FULL_TO_SHORT_1_HOURS if number == 1 else FULL_TO_SHORT_2_HOURS
-        for path in [p for p in shorts if int(p.stem.split("_")[1]) == number]:
-            assets.append(("short", path, delay))
+    # كل الأصول (الفيديو الكامل + الريل على كل منصة) بتستخدم نفس التأخير
+    # FULL_VIDEO_DELAY_HOURS، عشان تُنشر كلها مع بعض في نفس اللحظة.
+    assets: list[tuple[str, Path]] = [("full_video", full_path)]
+    for path in shorts:
+        assets.append(("short", path))
 
     successes = 0
     failures = []
-    for asset_type, path, delay in assets:
+    for asset_type, path in assets:
         platform_hint = path.stem.rsplit("_", 1)[-1] if asset_type == "short" else None
         if platform_hint and platform_hint not in services.values():
             # ملهاش قناة معرّفة أصلًا (زي انستجرام لو الـ secret ناقص) —
@@ -356,7 +360,7 @@ def main() -> None:
             print(f"⏭️  {path.name}: تخطي — لا توجد قناة {platform_hint} معرّفة (لم يُرفع الملف)")
             continue
         url = upload_media(path, github_token)
-        due_at = iso_after(delay)
+        due_at = iso_after(FULL_VIDEO_DELAY_HOURS)
         print(f"📤 {path.name} → {due_at} UTC")
         for cid in ids:
             service = services[cid]
