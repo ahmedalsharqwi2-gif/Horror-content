@@ -172,6 +172,13 @@ def load_used_hooks(limit: int = HISTORY_LIMIT) -> list[str]:
     return hooks[-limit:]
 
 
+CONTENT_RED_FLAGS = ("السيلينس", "الشهرات الجوية", "المحتلة بالدقيق", "البركان الثلجي")
+
+def find_content_red_flag(text: str) -> str | None:
+    plain = re.sub(r"[\u064B-\u065F\u0670]", "", text or "")
+    return next((flag for flag in CONTENT_RED_FLAGS if flag in plain), None)
+
+
 def looks_truncated(narration: str) -> bool:
     stripped = narration.strip()
     if not stripped:
@@ -324,6 +331,11 @@ def generate_episode() -> dict:
             continue
 
         narration = str(episode.get("narration", "")).strip()
+        red_flag = find_content_red_flag(narration)
+        if red_flag:
+            last_error = f"النص يحتوي مصطلحًا علميًا مرفوضًا أو مختلقًا: {red_flag}"
+            print(f"⚠️ محاولة {attempt}/{MAX_ATTEMPTS}: {last_error} — هعيد المحاولة...")
+            continue
         if looks_truncated(narration):
             last_error = "نص narration شكله متقطوع (مش منتهي بعلامة ترقيم واضحة)"
             print(f"⚠️ محاولة {attempt}/{MAX_ATTEMPTS}: {last_error} — هعيد المحاولة...")
