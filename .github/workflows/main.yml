@@ -2,7 +2,7 @@ name: Create and Publish Horror Episode
 
 on:
   schedule:
-    # الـ workflow بيتشغّل الساعة 08:00 UTC (11ص القاهرة، UTC+3) —
+    # الـ workflow بيتشغّل الساعة 13:30 UTC (16:30 القاهرة، UTC+3) —
     # ده معاد بدء التوليد بس، مش معاد النشر الفعلي؛ النشر نفسه مجدول
     # (dueAt عند Buffer، publishAt عند يوتيوب) على معاد واحد تحت.
     #
