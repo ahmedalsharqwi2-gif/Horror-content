@@ -26,7 +26,7 @@ permissions:
 jobs:
   build-and-publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
 
     steps:
       - name: Checkout repo
@@ -71,7 +71,21 @@ jobs:
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
         run: python scripts/fetch_clips.py
 
-      - name: Generate complete narration and landscape subtitles
+      - name: Prepare synthetic SILMA reference audio
+        run: |
+          mkdir -p assets
+          edge-tts --voice ar-EG-ShakirNeural \
+            --text "في عام 1943، بدأت خطة خداع عسكرية بوثيقة صغيرة، لكنها غيرت مسار معركة كاملة." \
+            --write-media assets/voice_reference_synthetic.mp3
+          ffmpeg -y -i assets/voice_reference_synthetic.mp3 \
+            -ac 1 -ar 24000 -sample_fmt s16 -t 8 \
+            assets/voice_reference_synthetic.wav
+      - name: Generate complete narration with SILMA and landscape subtitles
+        env:
+          TTS_ENGINE: "silma"
+          SILMA_REFERENCE_WAV: "assets/voice_reference_synthetic.wav"
+          SILMA_REFERENCE_TEXT: "في عام 1943، بدأت خطة خداع عسكرية بوثيقة صغيرة، لكنها غيرت مسار معركة كاملة."
+          SILMA_SPEED: "1.0"
         run: python scripts/generate_voice.py
 
       - name: Assemble full landscape video and single vertical reel

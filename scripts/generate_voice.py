@@ -39,6 +39,13 @@ EPISODE_PATH = STATE_DIR / "current_episode.json"
 BACKGROUND_MUSIC = ASSETS_DIR / "background_music.mp3"
 
 VOICE = "ar-EG-ShakirNeural"
+TTS_ENGINE = os.getenv("TTS_ENGINE", "silma").strip().lower()
+SILMA_REFERENCE_WAV = Path(os.getenv("SILMA_REFERENCE_WAV", "assets/voice_reference_synthetic.wav"))
+SILMA_REFERENCE_TEXT = os.getenv(
+    "SILMA_REFERENCE_TEXT",
+    "في عام 1943، بدأت خطة خداع عسكرية بوثيقة صغيرة، لكنها غيرت مسار معركة كاملة.",
+).strip()
+SILMA_SPEED = float(os.getenv("SILMA_SPEED", "1.0"))
 RATE = "-15%"
 PITCH = "-9Hz"
 VOLUME = "+0%"
@@ -153,7 +160,34 @@ def build_silence_clip(duration: float, path: Path) -> None:
     ])
 
 
+def synthesize_sentences_silma(sentences: list[str]) -> list[dict]:
+    reference = SILMA_REFERENCE_WAV if SILMA_REFERENCE_WAV.is_absolute() else ROOT_DIR / SILMA_REFERENCE_WAV
+    if not reference.exists():
+        raise RuntimeError(f"SILMA reference is missing: {reference}")
+    from silma_tts.api import SilmaTTS
+    print(f"🟣 Loading SILMA TTS v1 (speed={SILMA_SPEED})...")
+    silma = SilmaTTS()
+    segments = []
+    for index, sentence in enumerate(sentences):
+        sentence = re.sub(r"\s+", " ", sentence).strip()
+        wav_path = CLIPS_DIR / f"_seg_full_{index:03d}.wav"
+        silma.infer(ref_file=str(reference), ref_text=SILMA_REFERENCE_TEXT or None,
+                    gen_text=sentence, file_wave=str(wav_path), seed=None, speed=SILMA_SPEED)
+        duration = probe_duration(wav_path)
+        segments.append({"path": wav_path, "duration": duration, "events": None,
+                         "sentence": sentence, "is_silence": False})
+        if index < len(sentences) - 1:
+            pause = pause_duration_for(sentence)
+            pause_path = CLIPS_DIR / f"_pause_full_{index:03d}.mp3"
+            build_silence_clip(pause, pause_path)
+            segments.append({"path": pause_path, "duration": pause, "events": None,
+                             "sentence": None, "is_silence": True})
+    return segments
+
+
 async def synthesize_sentences(sentences: list[str]) -> list[dict]:
+    if TTS_ENGINE == "silma":
+        return synthesize_sentences_silma(sentences)
     segments = []
     for index, sentence in enumerate(sentences):
         seg_path = CLIPS_DIR / f"_seg_full_{index:03d}.mp3"
