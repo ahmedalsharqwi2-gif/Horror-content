@@ -90,6 +90,7 @@ jobs:
           SILMA_FALLBACK_TO_EDGE: "true"
           EDGE_TTS_RATE: "-8%"
           EDGE_TTS_PITCH: "-5Hz"
+          MUSIC_VOLUME: "0.07"
         run: python scripts/generate_voice.py
 
       - name: Assemble full landscape video and single vertical reel
