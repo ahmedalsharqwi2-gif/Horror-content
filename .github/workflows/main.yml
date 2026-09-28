@@ -60,8 +60,12 @@ jobs:
 
       - name: Generate complete episode script
         env:
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          GROQ_REASONING_EFFORT: low
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: "gemini-2.5-flash"
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_MODEL: "nvidia/nemotron-3-super-120b-a12b:free"
+          LLM_RETRIES: "1"
+          LLM_TIMEOUT: "90"
           TARGET_WORDS: "800"
           MIN_NARRATION_WORDS: "650"
         run: python scripts/generate_script.py

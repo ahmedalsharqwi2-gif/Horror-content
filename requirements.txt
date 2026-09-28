@@ -1,4 +1,4 @@
-groq
+google-genai
 requests
 edge-tts>=6.1.9
 google-auth

@@ -1,6 +1,6 @@
 """
 generate_script.py
-يستدعي Groq API عشان يولّد سيناريو القصة + كلمات البحث البصرية.
+يستدعي Gemini API مع OpenRouter كخطة احتياطية عشان يولّد سيناريو القصة + كلمات البحث البصرية.
 
 === تعديل جديد (قصص حقيقية + هوك + كلمات بحث دقيقة + تنويع جغرافي) ===
 
@@ -39,10 +39,14 @@ generate_script.py
 """
 import os
 import json
+import re
 import sys
+import time
 from pathlib import Path
 
-from groq import Groq  # pip install -U groq
+import requests
+from google import genai
+from google.genai import types
 
 SCRIPT_DIR = Path(__file__).parent
 PROMPT_PATH = SCRIPT_DIR.parent / "prompts" / "horror_system_prompt.md"
@@ -50,8 +54,14 @@ OUTPUT_PATH = SCRIPT_DIR.parent / "state" / "current_episode.json"
 
 # ─────────────────────────── الإعدادات ───────────────────────────
 
-MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
-REASONING_EFFORT = os.getenv("GROQ_REASONING_EFFORT", "low")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
+OPENROUTER_MODEL = os.getenv(
+    "OPENROUTER_MODEL", "nvidia/nemotron-3-super-120b-a12b:free"
+)
+LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "90"))
+LLM_RETRIES = max(1, int(os.getenv("LLM_RETRIES", "1")))
 TEMPERATURE = 0.85
 MAX_COMPLETION_TOKENS = 6000
 # اتحسب على أساس إن الحلقة دايمًا بتتقسم لجزئين (زي ما assemble_video.py
@@ -197,14 +207,92 @@ def log_usage(completion, attempt: int) -> None:
     )
 
 
-def create_completion(client: Groq, **kwargs):
-    try:
-        return client.chat.completions.create(**kwargs)
-    except TypeError:
-        effort = kwargs.pop("reasoning_effort", None)
-        if effort:
-            kwargs["extra_body"] = {"reasoning_effort": effort}
-        return client.chat.completions.create(**kwargs)
+def to_gemini_schema(schema: dict) -> dict:
+    """Convert the local JSON schema to Gemini's uppercase schema format."""
+    result = {"type": schema["type"].upper()}
+    if result["type"] == "OBJECT":
+        result["properties"] = {
+            key: to_gemini_schema(value)
+            for key, value in schema.get("properties", {}).items()
+        }
+        if schema.get("required"):
+            result["required"] = schema["required"]
+    elif result["type"] == "ARRAY":
+        result["items"] = to_gemini_schema(schema["items"])
+    return result
+
+
+def _gemini_completion(system_prompt: str, user_message: str, budget: int) -> str:
+    if not GEMINI_API_KEY:
+        raise RuntimeError("GEMINI_API_KEY is not set")
+    client = genai.Client(api_key=GEMINI_API_KEY)
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=user_message,
+        config=types.GenerateContentConfig(
+            system_instruction=system_prompt,
+            temperature=TEMPERATURE,
+            max_output_tokens=budget,
+            response_mime_type="application/json",
+            response_schema=to_gemini_schema(EPISODE_SCHEMA["schema"]),
+        ),
+    )
+    text = (response.text or "").strip()
+    if not text:
+        raise RuntimeError("Gemini returned an empty response")
+    print(f"🎬 Gemini: using model {GEMINI_MODEL}")
+    return text
+
+
+def _openrouter_completion(system_prompt: str, user_message: str, budget: int) -> str:
+    if not OPENROUTER_API_KEY:
+        raise RuntimeError("OPENROUTER_API_KEY is not set")
+    response = requests.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://github.com/ahmedalsharqwi2-gif/Horror-content",
+            "X-Title": "Horror Content Auto Publisher",
+        },
+        json={
+            "model": OPENROUTER_MODEL,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ],
+            "temperature": TEMPERATURE,
+            "max_tokens": budget,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": EPISODE_SCHEMA,
+            },
+        },
+        timeout=LLM_TIMEOUT,
+    )
+    if response.status_code != 200:
+        raise RuntimeError(f"OpenRouter HTTP {response.status_code}: {response.text[:300]}")
+    data = response.json()
+    text = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+    if not text.strip():
+        raise RuntimeError("OpenRouter returned an empty response")
+    print(f"🎬 OpenRouter: using model {OPENROUTER_MODEL}")
+    return text.strip()
+
+
+def generate_completion(system_prompt: str, user_message: str, budget: int) -> str:
+    """Use Gemini first, then OpenRouter, with bounded retries."""
+    errors = []
+    for provider in (_gemini_completion, _openrouter_completion):
+        for attempt in range(1, LLM_RETRIES + 1):
+            try:
+                return provider(system_prompt, user_message, budget)
+            except Exception as exc:  # noqa: BLE001 - provider fallback boundary
+                errors.append(f"{provider.__name__} attempt {attempt}: {exc}")
+                print(f"⚠️ {errors[-1]}")
+                if attempt < LLM_RETRIES:
+                    time.sleep(2 * attempt)
+    raise RuntimeError("; ".join(errors))
 
 
 # ─────────────────────────── التوليد ───────────────────────────
@@ -278,11 +366,8 @@ def build_user_message(
 
 
 def generate_episode() -> dict:
-    api_key = os.environ.get("GROQ_API_KEY")
-    if not api_key:
-        sys.exit("خطأ: لازم تضيف GROQ_API_KEY في GitHub Secrets")
-
-    client = Groq(api_key=api_key)
+    if not GEMINI_API_KEY and not OPENROUTER_API_KEY:
+        sys.exit("خطأ: أضف GEMINI_API_KEY أو OPENROUTER_API_KEY إلى GitHub Secrets")
     system_prompt = load_system_prompt()
     user_message = build_user_message(
         load_used_history(), load_used_regions(), load_used_hooks(),
@@ -291,32 +376,18 @@ def generate_episode() -> dict:
     budget = MAX_COMPLETION_TOKENS
     last_error = "لا يوجد"
 
-    print(f"🎬 الموديل: {MODEL} | reasoning_effort: {REASONING_EFFORT}")
+    print(
+        f"🎬 مزودو التوليد: Gemini ({GEMINI_MODEL}) ثم OpenRouter ({OPENROUTER_MODEL})"
+    )
 
     for attempt in range(1, MAX_ATTEMPTS + 1):
-        completion = create_completion(
-            client,
-            model=MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message},
-            ],
-            temperature=TEMPERATURE,
-            max_completion_tokens=budget,
-            reasoning_effort=REASONING_EFFORT,
-            response_format={"type": "json_schema", "json_schema": EPISODE_SCHEMA},
-        )
-
-        log_usage(completion, attempt)
-        choice = completion.choices[0]
-
-        if choice.finish_reason == "length":
+        try:
+            raw = generate_completion(system_prompt, user_message, budget)
+        except Exception as exc:  # noqa: BLE001 - report both provider failures
+            last_error = f"فشل Gemini وOpenRouter: {exc}"
+            print(f"⚠️ محاولة {attempt}/{MAX_ATTEMPTS}: {last_error}")
             budget = int(budget * LENGTH_ESCALATION)
-            last_error = "الرد اتقطع بسبب حد التوكنز (finish_reason=length)"
-            print(f"⚠️ {last_error} — هرفع السقف لـ {budget} وأعيد المحاولة...")
             continue
-
-        raw = choice.message.content or ""
 
         try:
             episode = json.loads(raw)
