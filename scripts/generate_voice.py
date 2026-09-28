@@ -30,6 +30,7 @@ import sys
 from pathlib import Path
 
 import edge_tts
+from voice_profiles import resolve_reference_profile
 
 SCRIPT_DIR = Path(__file__).parent
 ROOT_DIR = SCRIPT_DIR.parent
@@ -48,6 +49,8 @@ VOICE_CANDIDATES = list(dict.fromkeys(
 ))
 TTS_ENGINE = os.getenv("TTS_ENGINE", "silma").strip().lower()
 SILMA_REFERENCE_WAV = Path(os.getenv("SILMA_REFERENCE_WAV", "assets/voice_reference_synthetic.wav"))
+SILMA_REFERENCE_PROFILE = os.getenv("SILMA_REFERENCE_PROFILE", "auto").strip()
+SILMA_VOICE_PROFILES_FILE = Path(os.getenv("SILMA_VOICE_PROFILES_FILE", "assets/voices/voice_profiles.json"))
 SILMA_REFERENCE_TEXT = os.getenv(
     "SILMA_REFERENCE_TEXT",
     "في عام 1943، بدأت خطة خداع عسكرية بوثيقة صغيرة، لكنها غيرت مسار معركة كاملة.",
@@ -145,6 +148,20 @@ def save_voice_to_history(episode: dict, selected_voice: str) -> None:
         history_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     except (OSError, json.JSONDecodeError):
         print("⚠️ تعذر حفظ اختيار الصوت في سجل الحلقات")
+
+
+def configure_silma_voice_profile() -> str:
+    """Resolve the selected horror-appropriate reference WAV and transcript."""
+    global SILMA_REFERENCE_WAV, SILMA_REFERENCE_TEXT
+    selected, label, wav, transcript = resolve_reference_profile(
+        SILMA_REFERENCE_PROFILE,
+        SILMA_VOICE_PROFILES_FILE,
+        ROOT_DIR,
+    )
+    SILMA_REFERENCE_WAV = wav
+    SILMA_REFERENCE_TEXT = transcript
+    print(f"🎙️ ملف صوت الرعب المختار: {label} ({selected})")
+    return selected
 
 
 def run(command: list[str]) -> subprocess.CompletedProcess[str]:
@@ -503,8 +520,11 @@ def main() -> None:
     if not EPISODE_PATH.exists():
         sys.exit("❌ state/current_episode.json غير موجود.")
     episode = json.loads(EPISODE_PATH.read_text(encoding="utf-8"))
-    selected_voice = select_edge_voice(episode)
-    print(f"🎙️ صوت Edge المختار تلقائيًا: {selected_voice}")
+    selected_voice = (
+        configure_silma_voice_profile()
+        if TTS_ENGINE == "silma"
+        else select_edge_voice(episode)
+    )
     narration = normalize_text(str(episode.get("narration", "")))
     if not narration:
         sys.exit("❌ حقل narration غير موجود أو فارغ.")

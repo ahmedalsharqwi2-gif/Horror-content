@@ -71,10 +71,16 @@ jobs:
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
         run: python scripts/fetch_clips.py
 
-      - name: Generate complete narration with automatic Edge voice and landscape subtitles
+      - name: Generate complete narration with automatic SILMA horror voice and landscape subtitles
         env:
-          TTS_ENGINE: "edge"
-          EDGE_TTS_VOICES: "ar-EG-ShakirNeural,ar-SA-HamedNeural,ar-SA-ZariyahNeural"
+          TTS_ENGINE: "silma"
+          SILMA_REFERENCE_PROFILE: "auto"
+          SILMA_VOICE_PROFILES_FILE: "assets/voices/voice_profiles.json"
+          AUTO_VOICE_PROFILES: "hossam,hossam_uploaded,marwan,nassim,ahmed_z,egyptian_female"
+          SILMA_SPEED: "1.0"
+          SILMA_GUARD_ENABLED: "true"
+          SILMA_GUARD_MIN_MATCH_WORDS: "4"
+          SILMA_FALLBACK_TO_EDGE: "true"
           EDGE_TTS_RATE: "-8%"
           EDGE_TTS_PITCH: "-5Hz"
           MUSIC_VOLUME: "0.07"
