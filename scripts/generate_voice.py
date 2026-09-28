@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import difflib
+import hashlib
 import json
 import os
 import re
@@ -38,7 +39,13 @@ ASSETS_DIR = ROOT_DIR / "assets"
 EPISODE_PATH = STATE_DIR / "current_episode.json"
 BACKGROUND_MUSIC = ASSETS_DIR / "background_music.mp3"
 
-VOICE = "ar-EG-ShakirNeural"
+VOICE = os.getenv("EDGE_TTS_VOICE", "").strip()
+VOICE_CANDIDATES = list(dict.fromkeys(
+    item.strip() for item in os.getenv(
+        "EDGE_TTS_VOICES",
+        "ar-EG-ShakirNeural,ar-SA-HamedNeural,ar-SA-ZariyahNeural",
+    ).split(",") if item.strip()
+))
 TTS_ENGINE = os.getenv("TTS_ENGINE", "silma").strip().lower()
 SILMA_REFERENCE_WAV = Path(os.getenv("SILMA_REFERENCE_WAV", "assets/voice_reference_synthetic.wav"))
 SILMA_REFERENCE_TEXT = os.getenv(
@@ -91,6 +98,53 @@ HARD_WORDS_DIACRITICS = {
     "رعب": "رُعب", "صرخة": "صَرخة",
     "خطى": "خُطى", "شبح": "شَبَح", "صراخ": "صُراخ", "دفن": "دَفَن",
 }
+
+
+def select_edge_voice(episode: dict) -> str:
+    """Choose a different suitable Edge voice for each episode.
+
+    An explicit EDGE_TTS_VOICE always wins. Otherwise female-led stories prefer
+    the female Arabic voice; other stories rotate deterministically by title and
+    region while avoiding the most recently used voice when possible.
+    """
+    global VOICE
+    if VOICE:
+        return VOICE
+    if not VOICE_CANDIDATES:
+        raise RuntimeError("EDGE_TTS_VOICES لا يحتوي على أي صوت")
+    searchable = f"{episode.get('title', '')} {episode.get('narration', '')}"
+    female_story = bool(re.search(r"(امرأة|فتاة|طفلة|ممرضة|سيدة|أم|زوجة)", searchable))
+    preferred = [v for v in VOICE_CANDIDATES if "Zariyah" in v] if female_story else [
+        v for v in VOICE_CANDIDATES if "Zariyah" not in v
+    ]
+    pool = preferred or VOICE_CANDIDATES
+    history_path = STATE_DIR / "used_clips.json"
+    recent = []
+    if history_path.exists():
+        try:
+            history = json.loads(history_path.read_text(encoding="utf-8"))
+            recent = [h.get("voice_profile") for h in history.get("history", [])[-3:]]
+        except (OSError, json.JSONDecodeError):
+            recent = []
+    available = [v for v in pool if v not in recent] or pool
+    seed = f"{episode.get('title', '')}|{episode.get('region', '')}".encode()
+    VOICE = available[int.from_bytes(hashlib.sha256(seed).digest()[:4], "big") % len(available)]
+    return VOICE
+
+
+def save_voice_to_history(episode: dict, selected_voice: str) -> None:
+    history_path = STATE_DIR / "used_clips.json"
+    if not history_path.exists():
+        return
+    try:
+        data = json.loads(history_path.read_text(encoding="utf-8"))
+        for item in reversed(data.get("history", [])):
+            if item.get("title") == episode.get("title"):
+                item["voice_profile"] = selected_voice
+                break
+        history_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except (OSError, json.JSONDecodeError):
+        print("⚠️ تعذر حفظ اختيار الصوت في سجل الحلقات")
 
 
 def run(command: list[str]) -> subprocess.CompletedProcess[str]:
@@ -449,6 +503,8 @@ def main() -> None:
     if not EPISODE_PATH.exists():
         sys.exit("❌ state/current_episode.json غير موجود.")
     episode = json.loads(EPISODE_PATH.read_text(encoding="utf-8"))
+    selected_voice = select_edge_voice(episode)
+    print(f"🎙️ صوت Edge المختار تلقائيًا: {selected_voice}")
     narration = normalize_text(str(episode.get("narration", "")))
     if not narration:
         sys.exit("❌ حقل narration غير موجود أو فارغ.")
@@ -464,10 +520,12 @@ def main() -> None:
 
     episode.pop("parts", None)
     episode["narration"] = narration
+    episode["voice_profile"] = selected_voice
     episode["voice_audio"] = str(VOICE_AUDIO)
     episode["final_audio"] = str(FINAL_AUDIO)
     episode["subtitles"] = str(SUBTITLES)
     EPISODE_PATH.write_text(json.dumps(episode, ensure_ascii=False, indent=2), encoding="utf-8")
+    save_voice_to_history(episode, selected_voice)
     print(f"✅ صوت كامل: {FINAL_AUDIO}")
     print(f"✅ ترجمة أفقية متزامنة: {SUBTITLES}")
     print(f"✅ تلميحات نطق مُطبّقة: {len(phonetic_hints)}")
