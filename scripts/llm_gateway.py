@@ -20,6 +20,11 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Optional
 
+try:
+    from .language_guard import describe_letters, find_non_arabic_letters
+except ImportError:  # scripts are also executed directly from the scripts/ directory
+    from language_guard import describe_letters, find_non_arabic_letters
+
 # ───────────────────────── الإعدادات ─────────────────────────
 LLM_RETRIES = max(1, int(os.getenv("LLM_RETRIES", "3")))                  # محاولات لكل مزوّد عند الأخطاء المؤقتة
 LLM_INVALID_RETRIES = max(1, int(os.getenv("LLM_INVALID_RETRIES", "2")))  # محاولات لكل مزوّد عند الرد غير الصالح
@@ -196,8 +201,19 @@ def make_validator(find_content_red_flag: Optional[Callable] = None,
         if ep["story_type"] not in STORY_TYPES:
             raise OutputError("قيمة story_type لازم تكون true_case أو sci_fi")
 
-        hook = str(ep["hook"]).strip()
-        narration = str(ep["narration"]).strip()
+        for field_name in ("title", "hook", "region", "basis", "narration", "caption"):
+            field_value = ep[field_name]
+            if not isinstance(field_value, str):
+                raise OutputError(f"الحقل {field_name} يجب أن يكون نصًا عربيًا")
+            foreign = find_non_arabic_letters(field_value)
+            if foreign:
+                raise OutputError(
+                    f"الحقل {field_name} يحتوي كلمات/حروفًا من لغات أخرى؛ عرّبها: "
+                    f"{describe_letters(foreign)}"
+                )
+
+        hook = ep["hook"].strip()
+        narration = ep["narration"].strip()
         plain = strip_tashkeel(narration)
 
         if not hook:
@@ -241,9 +257,20 @@ def make_validator(find_content_red_flag: Optional[Callable] = None,
         if "#" not in str(ep["caption"]):
             raise OutputError("caption من غير هاشتاجات")
 
+        if not isinstance(ep["phonetic_hints"], list):
+            raise OutputError("phonetic_hints لازم تكون قائمة")
         for h in ep["phonetic_hints"]:
             if not isinstance(h, dict) or "word" not in h or "phonetic" not in h:
                 raise OutputError("phonetic_hints بصيغة غلط")
+            if not isinstance(h["word"], str) or not isinstance(h["phonetic"], str):
+                raise OutputError("word وphonetic داخل phonetic_hints يجب أن يكونا نصين")
+            for field_name in ("word", "phonetic"):
+                foreign = find_non_arabic_letters(h[field_name])
+                if foreign:
+                    raise OutputError(
+                        f"phonetic_hints.{field_name} يحتوي حروفًا غير عربية: "
+                        f"{describe_letters(foreign)}"
+                    )
             if strip_tashkeel(h["phonetic"]) != h["word"]:
                 raise OutputError(f"phonetic لازم يطابق word بعد حذف التشكيل: {h['word']}")
             if h["word"] not in plain:
