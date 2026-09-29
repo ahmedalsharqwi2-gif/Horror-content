@@ -7,6 +7,7 @@ import re
 import sys
 from pathlib import Path
 
+from arabic_guard import format_feedback, validate_narration
 from llm_gateway import (
     EPISODE_SCHEMA,
     OutputError,
@@ -97,6 +98,9 @@ def build_user_message(recent_titles: list[str], recent_regions: list[str], rece
 def validate_episode(episode: dict) -> None:
     """Project-specific checks layered on top of the gateway's structural checks."""
     narration = str(episode.get("narration", "")).strip()
+    arabic_issues = validate_narration(narration)
+    if arabic_issues:
+        raise OutputError(format_feedback(arabic_issues))
     red_flag = find_content_red_flag(narration)
     if red_flag:
         raise OutputError(f"النص يحتوي مصطلحًا مرفوضًا: {red_flag}")
