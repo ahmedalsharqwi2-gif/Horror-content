@@ -14,6 +14,11 @@ on:
     - cron: "30 13 * * *"
   workflow_dispatch:
 
+# Actions v5/v6 already target Node.js 24. Keep this explicit so GitHub does
+# not fall back to the deprecated Node.js 20 runtime for any transitive action.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 # يمنع تشغيل حلقتين في الوقت نفسه، ولا يلغي التشغيل الجاري.
 concurrency:
   group: horror-episode-pipeline
