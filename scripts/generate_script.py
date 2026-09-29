@@ -1,188 +1,57 @@
-"""
-generate_script.py
-يستدعي Gemini API مع OpenRouter كخطة احتياطية عشان يولّد سيناريو القصة + كلمات البحث البصرية.
+"""Generate and validate one horror episode using the shared LLM gateway."""
+from __future__ import annotations
 
-=== تعديل جديد (قصص حقيقية + هوك + كلمات بحث دقيقة + تنويع جغرافي) ===
-
-1) القصص بقت مطلوب منها تكون مبنية على حالات حقيقية/موثقة أو أساطير
-   حضرية مشهورة يُتداول إنها حقيقية (اختفاءات غامضة، قضايا غير محلولة،
-   أماكن مسكونة موثّقة إعلاميًا...)، بدل التأليف الكامل من الصفر.
-   ⚠️ تنويه مهم وصادق: الموديل مايقدرش "يتحقق" فعليًا من صحة أي حدث —
-   مفيش أداة بحث جوه السكريبت. اللي بيحصل هو توجيه الموديل لاستخدام
-   معرفته بقضايا/أساطير مشهورة فعلاً (زي أسلوب "مبنية على أحداث حقيقية"
-   الشائع في محتوى الرعب)، مش تحقق واقعي مضمون 100%. لو عايز تحقق حقيقي،
-   محتاج تضيف خطوة بحث ويب فعلية قبل التوليد (مش موجودة حاليًا).
-
-2) أُضيف حقل جديد إلزامي "hook" في الـ schema: جملة واحدة قوية وصادمة
-   تُستخدم كأول سطر يظهر في الفيديو (قبل أو مع بداية narration) عشان
-   تمسك المشاهد في أول ثانيتين. الموديل مطلوب منه يكتبها منفصلة، وبرضو
-   يبدأ بيها (أو بصياغة قريبة منها) أول narration.
-
-3) حقل جديد اختياري "region": المنطقة/الدولة اللي القصة منها (مثلاً
-   "اليابان"، "المكسيك"، "بولندا"...). بيتسجل في التاريخ عشان نمنع تكرار
-   نفس المنطقة كل مرة ونضمن تنويع جغرافي حقيقي. الحقل اختياري في القراءة
-   (load_used_history) عشان الكود يفضل شغال حتى لو ملف used_clips.json
-   القديم مفيهوش الحقل ده أصلاً.
-
-4) visual_keywords بقت مطلوب منها تكون مشتقة من تفاصيل ملموسة داخل نص
-   القصة نفسها (مكان/عصر/أغراض/شخصيات محددة مذكورة فعلاً)، مش كلمات رعب
-   عامة (زي "spooky forest" أو "scary house") بتجيب لقطات ستوك عشوائية
-   ملهاش علاقة مباشرة بالموضوع.
-
-⚠️ لأقوى التزام من الموديل، المفروض تضيف نفس التوجيهات دي (خصوصًا بند
-القصص الحقيقية والهوك) كجزء من prompts/horror_system_prompt.md نفسه،
-لأن الموديل بيتقيّد بالـ system prompt أكتر من رسالة المستخدم. ابعتلي
-محتوى الملف ده لو عايزني أدمج التوجيهات فيه مباشرة.
-
-=== تعديلات سابقة (نسخة الفصحى + توفير التوكن) ===
-[محفوظة كما هي أسفل الكود]
-"""
-import os
 import json
+import os
 import re
 import sys
-import time
 from pathlib import Path
 
-import requests
-from google import genai
-from google.genai import types
+from llm_gateway import (
+    EPISODE_SCHEMA,
+    OutputError,
+    WORDS_MAX,
+    WORDS_MIN,
+    generate_episode as gateway_generate_episode,
+    make_validator,
+)
 
 SCRIPT_DIR = Path(__file__).parent
-PROMPT_PATH = SCRIPT_DIR.parent / "prompts" / "horror_system_prompt.md"
-OUTPUT_PATH = SCRIPT_DIR.parent / "state" / "current_episode.json"
+ROOT = SCRIPT_DIR.parent
+PROMPT_PATH = ROOT / "prompts" / "horror_system_prompt.md"
+OUTPUT_PATH = ROOT / "state" / "current_episode.json"
+HISTORY_PATH = ROOT / "state" / "used_clips.json"
+HISTORY_LIMIT = int(os.getenv("HISTORY_LIMIT", "8"))
+REGION_HISTORY_LIMIT = int(os.getenv("REGION_HISTORY_LIMIT", "6"))
 
-# ─────────────────────────── الإعدادات ───────────────────────────
+CONTENT_RED_FLAGS = ("السيلينس", "الشهرات الجوية", "المحتلة بالدقيق", "البركان الثلجي")
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
-OPENROUTER_MODEL = os.getenv(
-    "OPENROUTER_MODEL", "nvidia/nemotron-3-super-120b-a12b:free"
-)
-LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "90"))
-LLM_RETRIES = max(1, int(os.getenv("LLM_RETRIES", "1")))
-TEMPERATURE = 0.85
-MAX_COMPLETION_TOKENS = 6000
-# اتحسب على أساس إن الحلقة دايمًا بتتقسم لجزئين (زي ما assemble_video.py
-# بيفترض دايمًا: final_video_part1.mp4 + final_video_part2.mp4)، وكل جزء
-# له حد أقصى صلب 90 ثانية (MAX_DURATION_SECONDS في assemble_video.py).
-# بمتوسط سرعة نطق عربي فصيح ~2.3-2.7 كلمة/ثانية:
-#   300 كلمة إجمالي (±15% = 255-345 كلمة) ≈ 94-150 ثانية إجمالي،
-#   يعني تقريبًا 47-75 ثانية للجزء الواحد بعد التقسيم بالنص — مسافة أمان
-#   كويسة تحت حد الـ90 ثانية لكل جزء.
-# لو قللت الرقم ده كتير، الجزء التاني ممكن يبقى قصير جدًا أو شبه فاضي.
-TARGET_WORDS = int(os.getenv("TARGET_WORDS", "300"))
-MAX_ATTEMPTS = 2
-HISTORY_LIMIT = 8
-LENGTH_ESCALATION = 1.5
-
-# آخر N مناطق/دول اتستخدمت — بتتبعت في الـ prompt عشان نضمن تنويع جغرافي
-# ومنمنعش نفس المنطقة تتكرر أكتر من مرة قريبة.
-REGION_HISTORY_LIMIT = 6
-
-# ⚠️ لو السكريبت اللي بيجيب الفيديوهات من Pexels بيتوقع visual_keywords
-# كـ string مفصول بفواصل بدل list، غيّر "type": "array" لـ "type": "string"
-# في الـ schema تحت.
-EPISODE_SCHEMA = {
-    "name": "horror_episode",
-    "strict": True,
-    "schema": {
-        "type": "object",
-        "properties": {
-            "title": {"type": "string"},
-            "hook": {"type": "string"},
-            "region": {"type": "string"},
-            "narration": {"type": "string"},
-            "visual_keywords": {"type": "array", "items": {"type": "string"}},
-            "caption": {"type": "string"},
-            # === تعديل جديد: تلميحات نطق للأسماء الأجنبية ===
-            # الأسماء الأجنبية (مناطق/مدن/أشخاص) هي أكثر ما يخرج نطقه سيئًا
-            # وواضح إنه صوت آلي من edge-tts، لأنها من غير قاعدة صرفية عربية
-            # ثابتة. كل مدخل: "word" (الكلمة/العبارة الأجنبية كما وردت
-            # بالضبط في narration) و"phonetic" (نفس الكلمة بالحروف الأساسية
-            # نفسها + تشكيل كامل يوضح نطقها الصحيح، من غير أي حرف زيادة).
-            # يُطبَّق في generate_voice.py قبل التوليد الصوتي فقط، ولا يظهر
-            # في الترجمة/الكابشن.
-            "phonetic_hints": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "word": {"type": "string"},
-                        "phonetic": {"type": "string"},
-                    },
-                    "required": ["word", "phonetic"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        "required": [
-            "title", "hook", "region", "narration",
-            "visual_keywords", "caption", "phonetic_hints",
-        ],
-        "additionalProperties": False,
-    },
-}
-
-REQUIRED_KEYS = set(EPISODE_SCHEMA["schema"]["required"])
-
-
-# ─────────────────────────── مساعدات ───────────────────────────
 
 def load_system_prompt() -> str:
     return PROMPT_PATH.read_text(encoding="utf-8")
 
 
-def load_used_history(limit: int = HISTORY_LIMIT) -> list[str]:
-    """يجيب آخر N عناوين عشان الموديل يتجنب التكرار."""
-    history_path = SCRIPT_DIR.parent / "state" / "used_clips.json"
-    if not history_path.exists():
+def _history() -> list[dict]:
+    if not HISTORY_PATH.exists():
         return []
     try:
-        data = json.loads(history_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+        data = json.loads(HISTORY_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
         return []
-    return [h.get("title", "") for h in data.get("history", [])][-limit:]
+    return data.get("history", []) if isinstance(data, dict) else []
+
+
+def load_used_history(limit: int = HISTORY_LIMIT) -> list[str]:
+    return [x.get("title", "") for x in _history() if x.get("title")][-limit:]
 
 
 def load_used_regions(limit: int = REGION_HISTORY_LIMIT) -> list[str]:
-    """
-    يجيب آخر N مناطق/دول اتستخدمت، عشان نطلب من الموديل يتجنب تكرارها.
-    آمن على ملفات used_clips.json القديمة اللي مفيهاش حقل "region" أصلاً
-    (هيتجاهلها ببساطة من غير ما يفشل).
-    """
-    history_path = SCRIPT_DIR.parent / "state" / "used_clips.json"
-    if not history_path.exists():
-        return []
-    try:
-        data = json.loads(history_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return []
-    regions = [h.get("region", "") for h in data.get("history", []) if h.get("region")]
-    return regions[-limit:]
+    return [x.get("region", "") for x in _history() if x.get("region")][-limit:]
 
 
 def load_used_hooks(limit: int = HISTORY_LIMIT) -> list[str]:
-    """
-    يجيب آخر N هوكات اتستخدمت. الهوك بيوصف الحادثة الواقعية نفسها بدقة
-    أكتر من العنوان (اللي ممكن يتغيّر صياغةً بين حلقة وحلقة عن نفس
-    الحادثة بالظبط) — بيُستخدم هنا عشان نمنع الموديل يرجع لنفس القضية
-    الشهيرة (زي حادثة ممر دياتلوف) تحت عنوان مختلف. آمن على ملفات
-    used_clips.json القديمة اللي مفيهاش حقل "hook" أصلاً.
-    """
-    history_path = SCRIPT_DIR.parent / "state" / "used_clips.json"
-    if not history_path.exists():
-        return []
-    try:
-        data = json.loads(history_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return []
-    hooks = [h.get("hook", "") for h in data.get("history", []) if h.get("hook")]
-    return hooks[-limit:]
+    return [x.get("hook", "") for x in _history() if x.get("hook")][-limit:]
 
-
-CONTENT_RED_FLAGS = ("السيلينس", "الشهرات الجوية", "المحتلة بالدقيق", "البركان الثلجي")
 
 def find_content_red_flag(text: str) -> str | None:
     plain = re.sub(r"[\u064B-\u065F\u0670]", "", text or "")
@@ -191,24 +60,11 @@ def find_content_red_flag(text: str) -> str | None:
 
 def looks_truncated(narration: str) -> bool:
     stripped = narration.strip()
-    if not stripped:
-        return True
-    return not stripped.endswith((".", "!", "؟", "?", "…", '"', "”", "»"))
-
-
-def log_usage(completion, attempt: int) -> None:
-    usage = getattr(completion, "usage", None)
-    if not usage:
-        return
-    print(
-        f"   🔢 محاولة {attempt} | مدخل: {usage.prompt_tokens} "
-        f"| مخرج: {usage.completion_tokens} "
-        f"| إجمالي: {usage.total_tokens}"
-    )
+    return not stripped or not stripped.endswith((".", "!", "؟", "?", "…", '"', "”", "»"))
 
 
 def to_gemini_schema(schema: dict) -> dict:
-    """Convert the local JSON schema to Gemini's uppercase schema format."""
+    """Convert the local JSON schema to the Gemini SDK's schema format."""
     result = {"type": schema["type"].upper()}
     if result["type"] == "OBJECT":
         result["properties"] = {
@@ -222,221 +78,76 @@ def to_gemini_schema(schema: dict) -> dict:
     return result
 
 
-def _gemini_completion(system_prompt: str, user_message: str, budget: int) -> str:
-    if not GEMINI_API_KEY:
-        raise RuntimeError("GEMINI_API_KEY is not set")
-    client = genai.Client(api_key=GEMINI_API_KEY)
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=user_message,
-        config=types.GenerateContentConfig(
-            system_instruction=system_prompt,
-            temperature=TEMPERATURE,
-            max_output_tokens=budget,
-            response_mime_type="application/json",
-            response_schema=to_gemini_schema(EPISODE_SCHEMA["schema"]),
-        ),
-    )
-    text = (response.text or "").strip()
-    if not text:
-        raise RuntimeError("Gemini returned an empty response")
-    print(f"🎬 Gemini: using model {GEMINI_MODEL}")
-    return text
-
-
-def _openrouter_completion(system_prompt: str, user_message: str, budget: int) -> str:
-    if not OPENROUTER_API_KEY:
-        raise RuntimeError("OPENROUTER_API_KEY is not set")
-    response = requests.post(
-        "https://openrouter.ai/api/v1/chat/completions",
-        headers={
-            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://github.com/ahmedalsharqwi2-gif/Horror-content",
-            "X-Title": "Horror Content Auto Publisher",
-        },
-        json={
-            "model": OPENROUTER_MODEL,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message},
-            ],
-            "temperature": TEMPERATURE,
-            "max_tokens": budget,
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": EPISODE_SCHEMA,
-            },
-        },
-        timeout=LLM_TIMEOUT,
-    )
-    if response.status_code != 200:
-        raise RuntimeError(f"OpenRouter HTTP {response.status_code}: {response.text[:300]}")
-    data = response.json()
-    text = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
-    if not text.strip():
-        raise RuntimeError("OpenRouter returned an empty response")
-    print(f"🎬 OpenRouter: using model {OPENROUTER_MODEL}")
-    return text.strip()
-
-
-def generate_completion(system_prompt: str, user_message: str, budget: int) -> str:
-    """Use Gemini first, then OpenRouter, with bounded retries."""
-    errors = []
-    for provider in (_gemini_completion, _openrouter_completion):
-        for attempt in range(1, LLM_RETRIES + 1):
-            try:
-                return provider(system_prompt, user_message, budget)
-            except Exception as exc:  # noqa: BLE001 - provider fallback boundary
-                errors.append(f"{provider.__name__} attempt {attempt}: {exc}")
-                print(f"⚠️ {errors[-1]}")
-                if attempt < LLM_RETRIES:
-                    time.sleep(2 * attempt)
-    raise RuntimeError("; ".join(errors))
-
-
-# ─────────────────────────── التوليد ───────────────────────────
-
-def build_user_message(
-    recent_titles: list[str], recent_regions: list[str], recent_hooks: list[str],
-) -> str:
+def build_user_message(recent_titles: list[str], recent_regions: list[str], recent_hooks: list[str]) -> str:
     message = (
-        "اكتب حلقة جديدة تمامًا.\n\n"
-        "⚠️ مهم جدًا بخصوص اللغة: اكتب حقل narration بالكامل باللغة العربية "
-        "الفصحى المبسّطة (Modern Standard Arabic) فقط. ممنوع استخدام أي "
-        "لهجة عامية أو محلية حتى لو كلمة واحدة.\n\n"
-        "⚠️ مهم جدًا بخصوص مصدر القصة: لازم تكون القصة مبنية على حادثة "
-        "حقيقية موثّقة، أو قضية غامضة معروفة إعلاميًا، أو أسطورة حضرية "
-        "مشهورة يُتداول على نطاق واسع إنها حقيقية (اختفاء غامض، بيت مسكون "
-        "موثّق، حادثة غير محلولة...). ممنوع اختراع قصة خيالية بالكامل من "
-        "الصفر. لو التفاصيل الدقيقة مش متأكد منها 100%، استخدم صياغة "
-        "شائعة زي 'تقول الروايات إن...' أو 'وفقًا لما تم توثيقه...' بدل "
-        "تقديم تفاصيل مختلقة كحقيقة مؤكدة قطعيًا.\n\n"
-        "⚠️ مهم جدًا جدًا بخصوص عدم التكرار: ممنوع منعًا باتًا اختيار نفس "
-        "الحادثة الواقعية اللي اتستخدمت في حلقة سابقة، حتى لو غيّرت "
-        "العنوان أو الصياغة بالكامل. راجع قائمة الهوكات (وليس العناوين "
-        "فقط) اللي اتستخدمت قبل كده تحت — لو الحادثة اللي في بالك بتوصف "
-        "نفس واقعة أي هوك منهم (حتى بتفاصيل أو زاوية مختلفة شكليًا)، "
-        "ارفضها فورًا واختار حادثة مختلفة تمامًا. بالتحديد: تجنب حادثة "
-        "'ممر دياتلوف' (Dyatlov Pass) في روسيا كليًا إلا في حالات نادرة "
-        "جدًا، لأنها من أكثر القضايا استخدامًا وتكرارًا في هذا النوع من "
-        "المحتوى على الإنترنت وأصبحت مستهلكة ومتوقعة للمشاهد، وركّز بدلًا "
-        "منها على قضايا حقيقية موثقة لكن أقل شهرة وأقل تداولًا.\n\n"
-        "⚠️ مهم جدًا بخصوص الهوك: أول جملة في حقل hook لازم تكون صادمة "
-        "ومباشرة وتخلق فضول فوري (سؤال مثير، حقيقة صادمة، أو مشهد لحظة "
-        "الذروة) — الهدف إنها توقف المشاهد عن الاسكرول في أول ثانيتين. "
-        "وبعدين ابدأ narration بنفس الهوك أو صياغة قريبة جدًا منه كأول "
-        "جملة فيه، مش بمقدمة عامة بطيئة.\n\n"
-        "⚠️ مهم جدًا بخصوص شدة الرعب: الهدف مش إنك تحكي واقعة حصلت وخلاص "
-        "— الهدف إن قلب المشاهد يدق بسرعة وهو بيسمع. استخدم تفاصيل حسّية "
-        "(نبض، تنفّس متقطع، عرق بارد، صمت مفاجئ يقطعه صوت) بدل جمل عامة "
-        "زي 'كان خايف'. صعّد التوتر باستمرار جملة بعد جملة، مش بس في "
-        "الذروة، واستخدم جملاً قصيرة متقطعة في لحظات الترقب. راجع "
-        "التعليمات التفصيلية في الـ system prompt لو محتاج تفاصيل أكتر.\n\n"
-        "⚠️ مهم جدًا بخصوص visual_keywords: كل كلمة بحث لازم تكون مشتقة "
-        "من تفاصيل ملموسة ومحددة مذكورة فعليًا في narration (المكان "
-        "بالاسم أو الوصف، العصر/الفترة الزمنية، الأغراض أو المشاهد "
-        "المحددة المذكورة في القصة). ممنوع كلمات رعب عامة وفضفاضة زي "
-        "'spooky forest' أو 'scary house' من غير علاقة مباشرة بتفاصيل "
-        "القصة، لأنها بتجيب لقطات ستوك عشوائية ملهاش علاقة بالموضوع.\n\n"
-        "⚠️ التنويع الجغرافي: اختار منطقة/دولة مختلفة عن المناطق اللي "
-        "اتذكرت قبل كده (تحت). حط اسم المنطقة/الدولة في حقل region.\n\n"
-        f"الطول المستهدف لحقل narration: حوالي {TARGET_WORDS} كلمة (±15%).\n"
-        "لازم القصة تكون مكتملة: بداية واضحة (الهوك)، تصاعد حقيقي، وخاتمة "
-        "فعلية تقفل القصة من غير تقطيع.\n"
-        "اكتب النص النهائي مباشرة: من غير أي تمهيد أو شرح أو تعليق."
+        "اكتب حلقة جديدة تمامًا، وأخرج كائن JSON واحدًا فقط.\n\n"
+        "التزم بنمط story_type الذي سأحدده لك، وبقواعد اللغة الفصحى والرعب النفسي الموجودة في system prompt.\n"
+        f"طول narration المطلوب من {WORDS_MIN} إلى {WORDS_MAX} كلمة.\n"
+        "لا تكرر نفس الحادثة أو الفكرة أو المنطقة المذكورة في القوائم أدناه."
     )
     if recent_titles:
-        message += (
-            "\n\nالعناوين اللي اتستخدمت قبل كده (تجنب أي تشابه معاها):\n- "
-            + "\n- ".join(recent_titles)
-        )
+        message += "\n\nالعناوين السابقة:\n- " + "\n- ".join(recent_titles)
     if recent_hooks:
-        message += (
-            "\n\nالهوكات (ومن ثم الحوادث الفعلية) اللي اتستخدمت قبل كده — "
-            "ممنوع اختيار نفس الحادثة حتى بهوك أو عنوان مختلف:\n- "
-            + "\n- ".join(recent_hooks)
-        )
+        message += "\n\nالهوكات/الحوادث السابقة:\n- " + "\n- ".join(recent_hooks)
     if recent_regions:
-        message += (
-            "\n\nالمناطق/الدول اللي اتستخدمت قبل كده (اختار منطقة مختلفة "
-            "عنها):\n- " + "\n- ".join(recent_regions)
-        )
+        message += "\n\nالمناطق السابقة:\n- " + "\n- ".join(recent_regions)
     return message
 
 
+def validate_episode(episode: dict) -> None:
+    """Project-specific checks layered on top of the gateway's structural checks."""
+    narration = str(episode.get("narration", "")).strip()
+    red_flag = find_content_red_flag(narration)
+    if red_flag:
+        raise OutputError(f"النص يحتوي مصطلحًا مرفوضًا: {red_flag}")
+    if not str(episode.get("hook", "")).strip():
+        raise OutputError("حقل hook فاضي")
+    if not episode.get("visual_keywords"):
+        raise OutputError("حقل visual_keywords فاضي")
+    if looks_truncated(narration):
+        raise OutputError("نص narration شكله متقطوع", truncated=True)
+
+
 def generate_episode() -> dict:
-    if not GEMINI_API_KEY and not OPENROUTER_API_KEY:
-        sys.exit("خطأ: أضف GEMINI_API_KEY أو OPENROUTER_API_KEY إلى GitHub Secrets")
     system_prompt = load_system_prompt()
     user_message = build_user_message(
-        load_used_history(), load_used_regions(), load_used_hooks(),
+        load_used_history(), load_used_regions(), load_used_hooks()
+    )
+    if not any(os.getenv(key, "").strip() for key in ("GEMINI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY")):
+        sys.exit("خطأ: أضف GEMINI_API_KEY أو GROQ_API_KEY أو OPENROUTER_API_KEY إلى GitHub Secrets")
+
+    validator = make_validator(
+        find_content_red_flag=find_content_red_flag,
+        looks_truncated=looks_truncated,
     )
 
-    budget = MAX_COMPLETION_TOKENS
-    last_error = "لا يوجد"
+    def combined_validator(episode: dict) -> None:
+        validator(episode)
+        validate_episode(episode)
 
-    print(
-        f"🎬 مزودو التوليد: Gemini ({GEMINI_MODEL}) ثم OpenRouter ({OPENROUTER_MODEL})"
-    )
-
-    for attempt in range(1, MAX_ATTEMPTS + 1):
-        try:
-            raw = generate_completion(system_prompt, user_message, budget)
-        except Exception as exc:  # noqa: BLE001 - report both provider failures
-            last_error = f"فشل Gemini وOpenRouter: {exc}"
-            print(f"⚠️ محاولة {attempt}/{MAX_ATTEMPTS}: {last_error}")
-            budget = int(budget * LENGTH_ESCALATION)
-            continue
-
-        try:
-            episode = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            last_error = f"رد غير صالح JSON ({exc})"
-            print(f"⚠️ محاولة {attempt}/{MAX_ATTEMPTS}: {last_error} — هعيد المحاولة...")
-            continue
-
-        if not REQUIRED_KEYS.issubset(episode.keys()):
-            last_error = f"الرد ناقص حقول مطلوبة: {sorted(episode.keys())}"
-            print(f"⚠️ محاولة {attempt}/{MAX_ATTEMPTS}: {last_error} — هعيد المحاولة...")
-            continue
-
-        narration = str(episode.get("narration", "")).strip()
-        red_flag = find_content_red_flag(narration)
-        if red_flag:
-            last_error = f"النص يحتوي مصطلحًا علميًا مرفوضًا أو مختلقًا: {red_flag}"
-            print(f"⚠️ محاولة {attempt}/{MAX_ATTEMPTS}: {last_error} — هعيد المحاولة...")
-            continue
-        if looks_truncated(narration):
-            last_error = "نص narration شكله متقطوع (مش منتهي بعلامة ترقيم واضحة)"
-            print(f"⚠️ محاولة {attempt}/{MAX_ATTEMPTS}: {last_error} — هعيد المحاولة...")
-            continue
-
-        if not episode.get("visual_keywords"):
-            last_error = "حقل visual_keywords فاضي"
-            print(f"⚠️ محاولة {attempt}/{MAX_ATTEMPTS}: {last_error} — هعيد المحاولة...")
-            continue
-
-        if not str(episode.get("hook", "")).strip():
-            last_error = "حقل hook فاضي"
-            print(f"⚠️ محاولة {attempt}/{MAX_ATTEMPTS}: {last_error} — هعيد المحاولة...")
-            continue
-
-        return episode
-
-    sys.exit(
-        f"❌ فشل توليد حلقة سليمة بعد {MAX_ATTEMPTS} محاولات. آخر خطأ: {last_error}"
-    )
+    budget = int(os.getenv("LLM_INITIAL_BUDGET", "6000"))
+    print("🎬 بوابة التوليد: Gemini بالتتابع ثم Groq ثم OpenRouter")
+    try:
+        episode = gateway_generate_episode(
+            system_prompt=system_prompt,
+            budget=budget,
+            validate=combined_validator,
+            to_gemini_schema=to_gemini_schema,
+            used_hooks=load_used_hooks(),
+            recent_regions=load_used_regions(),
+            rounds=int(os.getenv("LLM_ROUNDS", "2")),
+            cooldown=int(os.getenv("LLM_ROUND_COOLDOWN", "30")),
+        )
+    except Exception as exc:  # noqa: BLE001 - CLI boundary
+        raise SystemExit(f"❌ فشل توليد حلقة سليمة: {exc}") from exc
+    return episode
 
 
 if __name__ == "__main__":
     episode = generate_episode()
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    OUTPUT_PATH.write_text(
-        json.dumps(episode, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    OUTPUT_PATH.write_text(json.dumps(episode, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"✅ اتكتبت الحلقة: {episode['title']}")
+    print(f"   النوع: {episode.get('story_type', 'غير محدد')}")
     print(f"   المنطقة: {episode.get('region', 'غير محدد')}")
     print(f"   الهوك: {episode.get('hook', '')[:80]}")
-    print(f"   كلمات البحث: {episode['visual_keywords']}")
-    print(f"   تلميحات النطق: {episode.get('phonetic_hints', [])}")

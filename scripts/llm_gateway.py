@@ -1,0 +1,491 @@
+# -*- coding: utf-8 -*-
+"""
+بوابة توليد الحلقات (LLM Gateway)
+
+الفكرة الأساسية:
+  - كل مزوّد (موديل) ياخد فرصة حقيقية قبل ما ننتقل للي بعده.
+  - الفحص جزء من معنى "النجاح": أي رد بايظ (JSON ناقص، نص مقطوع، مخالف للقواعد)
+    يُحسب فشل وننتقل للمرشح التالي، ومش بنعتبره رد سليم.
+  - الأخطاء بتتصنف: مؤقتة (نستنى ونعيد)، حصة/دائمة (نتخطى المزوّد فورًا)،
+    ورد غير صالح (نعيد مع ملاحظة بالمشكلة، ولو مقطوع نزوّد الميزانية).
+
+الترتيب:  موديلات Gemini بالتتابع  ->  Groq (مخرجات منظّمة صارمة)  ->  OpenRouter (احتياطي أخير)
+"""
+
+import json
+import os
+import random
+import re
+import time
+from dataclasses import dataclass
+from typing import Callable, Optional
+
+# ───────────────────────── الإعدادات ─────────────────────────
+LLM_RETRIES = max(1, int(os.getenv("LLM_RETRIES", "3")))                  # محاولات لكل مزوّد عند الأخطاء المؤقتة
+LLM_INVALID_RETRIES = max(1, int(os.getenv("LLM_INVALID_RETRIES", "2")))  # محاولات لكل مزوّد عند الرد غير الصالح
+LLM_DEADLINE_SECONDS = int(os.getenv("LLM_DEADLINE_SECONDS", "480"))      # سقف زمني كلي لكل جولة
+BACKOFF_BASE = float(os.getenv("LLM_BACKOFF_BASE", "4"))
+BACKOFF_MAX = float(os.getenv("LLM_BACKOFF_MAX", "40"))
+BUDGET_STEP = float(os.getenv("LENGTH_ESCALATION", "1.5"))                # مضاعف الميزانية عند القطع
+MAX_BUDGET = int(os.getenv("LLM_MAX_BUDGET", "16000"))
+TEMPERATURE = float(os.getenv("TEMPERATURE", "0.9"))
+REQUEST_TIMEOUT = int(os.getenv("LLM_REQUEST_TIMEOUT", "120"))
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+# سلسلة موديلات Gemini: الأساسي ثم بدائل أخف وأكثر توفرًا (بدون تكرار)
+GEMINI_MODELS = list(dict.fromkeys(
+    m.strip() for m in os.getenv(
+        "GEMINI_MODELS", f"{GEMINI_MODEL},gemini-2.5-flash,gemini-2.5-flash-lite"
+    ).split(",") if m.strip()
+))
+# التفكير الداخلي بيستهلك من max_output_tokens وبيسبب قطع الرد؛ الصفر يقفله (-1 يتركه للموديل)
+GEMINI_THINKING_BUDGET = int(os.getenv("GEMINI_THINKING_BUDGET", "0"))
+
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "")
+
+# حدود طول السرد بالكلمات (الموديل بيقدّر الكلمات أدق بكثير من الثواني)
+WORDS_MIN = int(os.getenv("NARRATION_WORDS_MIN", "220"))
+WORDS_MAX = int(os.getenv("NARRATION_WORDS_MAX", "330"))
+
+STORY_TYPES = ("true_case", "sci_fi")
+
+REQUIRED_KEYS = {
+    "title", "hook", "region", "story_type", "basis",
+    "narration", "visual_keywords", "caption", "phonetic_hints",
+}
+
+# ───────────────────────── مخطط الحلقة ─────────────────────────
+EPISODE_SCHEMA = {
+    "name": "episode",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string"},
+            "hook": {"type": "string"},
+            "region": {"type": "string"},
+            "story_type": {"type": "string", "enum": list(STORY_TYPES)},
+            "basis": {"type": "string"},
+            "narration": {"type": "string"},
+            "visual_keywords": {"type": "array", "items": {"type": "string"}},
+            "caption": {"type": "string"},
+            "phonetic_hints": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "word": {"type": "string"},
+                        "phonetic": {"type": "string"},
+                    },
+                    "required": ["word", "phonetic"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "required": sorted(REQUIRED_KEYS),
+        "additionalProperties": False,
+    },
+}
+
+
+# ───────────────────────── الأخطاء وتصنيفها ─────────────────────────
+class OutputError(Exception):
+    """رد وصل من المزوّد لكنه غير صالح (JSON بايظ أو مقطوع أو مخالف للقواعد)."""
+
+    def __init__(self, problem: str, truncated: bool = False):
+        super().__init__(problem)
+        self.problem = problem
+        self.truncated = truncated
+
+
+QUOTA_MARKERS = ("PerDay", "per day", "daily limit", "insufficient_quota")
+RATE_MARKERS = ("429", "RESOURCE_EXHAUSTED", "rate limit", "rate_limit")
+TRANSIENT_MARKERS = ("500", "502", "503", "504", "UNAVAILABLE", "overloaded",
+                     "timed out", "timeout", "temporarily", "connection")
+PERMANENT_MARKERS = ("400", "401", "403", "404", "PERMISSION_DENIED",
+                     "INVALID_ARGUMENT", "NOT_FOUND", "API key", "is not set")
+
+
+def _has(msg: str, markers) -> bool:
+    for m in markers:
+        pattern = rf"\b{re.escape(m)}\b" if m.isdigit() else re.escape(m)
+        if re.search(pattern, msg, flags=re.I):
+            return True
+    return False
+
+
+def classify(exc: Exception) -> str:
+    """يرجّع: invalid | quota | rate | transient | permanent | unknown"""
+    if isinstance(exc, OutputError):
+        return "invalid"
+    msg = str(exc)
+    if _has(msg, QUOTA_MARKERS):
+        return "quota"      # حصة يومية خلصت: مفيش فايدة من الإعادة
+    if _has(msg, RATE_MARKERS):
+        return "rate"
+    if _has(msg, TRANSIENT_MARKERS):
+        return "transient"
+    if _has(msg, PERMANENT_MARKERS):
+        return "permanent"  # مفتاح ناقص/صلاحية/معامل غير مدعوم
+    return "unknown"
+
+
+def _backoff(attempt: int) -> float:
+    base = min(BACKOFF_BASE * 2 ** (attempt - 1), BACKOFF_MAX)
+    return base * random.uniform(0.75, 1.25)  # عشوائية بسيطة عشان مانضربش الخدمة في نفس اللحظة
+
+
+# ───────────────────────── تحليل الرد ─────────────────────────
+def parse_episode_json(raw: str) -> dict:
+    """محلل متسامح: يشيل الـ think والأسوار البرمجية ويستخرج أول كائن JSON."""
+    text = (raw or "").strip()
+    if not text:
+        raise OutputError("الرد فاضي", truncated=True)
+    if "<think>" in text and "</think>" not in text:
+        raise OutputError("الرد اتقطع أثناء التفكير", truncated=True)
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
+    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.I).strip()
+
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1:
+        raise OutputError("مفيش JSON في الرد")
+    if end <= start:
+        raise OutputError("JSON مقطوع (مفيش قوس إغلاق)", truncated=True)
+
+    body = text[start:end + 1]
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError as first:
+        # إصلاح خفيف: فواصل زائدة قبل الأقواس
+        fixed = re.sub(r",\s*([}\]])", r"\1", body)
+        try:
+            return json.loads(fixed)
+        except json.JSONDecodeError:
+            raise OutputError(f"JSON بايظ: {first.msg} عند الموضع {first.pos}") from first
+
+
+# ───────────────────────── فحص الحلقة ─────────────────────────
+_DIACRITICS = re.compile(r"[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED\u0640]")
+
+
+def strip_tashkeel(s: str) -> str:
+    return _DIACRITICS.sub("", s)
+
+
+BANNED_OPENERS = ("في ليلة مظلمة", "هذه قصة حقيقية", "لن تصدق", "استعد لسماع",
+                  "قصة حقيقية حدثت", "هل تعلم")
+# عبارات ممنوعة في نمط الخيال العلمي لأنها بتقدّم الخيال كحقيقة
+REAL_CLAIMS = ("قصة حقيقية", "حدثت فعلا", "وقعت فعلا", "موثقة رسميا", "حادثة حقيقية")
+
+
+def make_validator(find_content_red_flag: Optional[Callable] = None,
+                   looks_truncated: Optional[Callable] = None) -> Callable:
+    """يبني دالة فحص. مرّر دوالك الحالية من main.py (اختياري)."""
+
+    def validate(ep) -> None:
+        if not isinstance(ep, dict):
+            raise OutputError("الرد مش كائن JSON")
+        missing = REQUIRED_KEYS - set(ep.keys())
+        if missing:
+            raise OutputError(f"حقول ناقصة: {sorted(missing)}")
+        if ep["story_type"] not in STORY_TYPES:
+            raise OutputError("قيمة story_type لازم تكون true_case أو sci_fi")
+
+        hook = str(ep["hook"]).strip()
+        narration = str(ep["narration"]).strip()
+        plain = strip_tashkeel(narration)
+
+        if not hook:
+            raise OutputError("hook فاضي")
+        if len(hook.split()) > 28:
+            raise OutputError("hook أطول من اللازم (الحد الأقصى 28 كلمة)")
+        for opener in BANNED_OPENERS:
+            if hook.startswith(opener) or narration.startswith(opener):
+                raise OutputError(f"افتتاحية مستهلكة ممنوعة: {opener}")
+
+        words = len(narration.split())
+        cut = bool(looks_truncated and looks_truncated(narration))
+        if cut:
+            raise OutputError("نص narration مقطوع", truncated=True)
+        if words < WORDS_MIN:
+            raise OutputError(f"narration قصير: {words} كلمة والمطلوب من {WORDS_MIN} إلى {WORDS_MAX}")
+        if words > int(WORDS_MAX * 1.1):
+            raise OutputError(f"narration طويل: {words} كلمة والمطلوب من {WORDS_MIN} إلى {WORDS_MAX}")
+
+        if find_content_red_flag:
+            flag = find_content_red_flag(narration)
+            if flag:
+                raise OutputError(f"النص يحتوي مصطلحًا مرفوضًا: {flag}")
+
+        if ep["story_type"] == "sci_fi":
+            for claim in REAL_CLAIMS:
+                if claim in plain:
+                    raise OutputError(f"الخيال العلمي ما ينفعش يتقدّم كحقيقة: {claim}")
+            if "خيال" not in str(ep["caption"]):
+                raise OutputError("caption لازم يذكر إن القصة خيالية")
+        if not str(ep["basis"]).strip():
+            raise OutputError("basis فاضي")
+
+        kws = ep["visual_keywords"]
+        if not isinstance(kws, list) or not (6 <= len(kws) <= 10):
+            raise OutputError("visual_keywords لازم يكون من 6 إلى 10 كلمات بحث")
+        for k in kws:
+            if not isinstance(k, str) or not re.fullmatch(r"[A-Za-z0-9 ,'\-]+", k.strip()):
+                raise OutputError(f"كلمة بحث لازم تكون إنجليزية فقط: {k!r}")
+
+        if "#" not in str(ep["caption"]):
+            raise OutputError("caption من غير هاشتاجات")
+
+        for h in ep["phonetic_hints"]:
+            if not isinstance(h, dict) or "word" not in h or "phonetic" not in h:
+                raise OutputError("phonetic_hints بصيغة غلط")
+            if strip_tashkeel(h["phonetic"]) != h["word"]:
+                raise OutputError(f"phonetic لازم يطابق word بعد حذف التشكيل: {h['word']}")
+            if h["word"] not in plain:
+                raise OutputError(f"الكلمة {h['word']} مش موجودة في narration")
+
+    return validate
+
+
+# ───────────────────────── المزوّدون ─────────────────────────
+@dataclass
+class Provider:
+    label: str
+    fn: Callable[[str, str, int], str]
+    dead: bool = False  # لو true نتخطاه لباقي التشغيل
+
+
+def _gemini_completion(system_prompt, user_message, budget, model, gemini_schema) -> str:
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client(api_key=GEMINI_API_KEY)
+
+    def _call(with_thinking: bool):
+        cfg = dict(
+            system_instruction=system_prompt,
+            temperature=TEMPERATURE,
+            max_output_tokens=budget,
+            response_mime_type="application/json",
+            response_schema=gemini_schema,
+        )
+        if with_thinking:
+            cfg["thinking_config"] = types.ThinkingConfig(thinking_budget=GEMINI_THINKING_BUDGET)
+        return client.models.generate_content(
+            model=model, contents=user_message,
+            config=types.GenerateContentConfig(**cfg),
+        )
+
+    try:
+        response = _call(GEMINI_THINKING_BUDGET >= 0)
+    except Exception as exc:  # noqa: BLE001
+        # بعض الموديلات ما بتقبلش إعداد التفكير: نعيد بدونه بدل ما نخسر الموديل كله
+        if "thinking" in str(exc).lower():
+            response = _call(False)
+        else:
+            raise
+
+    finish = ""
+    try:
+        finish = str(response.candidates[0].finish_reason)
+    except Exception:  # noqa: BLE001
+        pass
+    if "MAX_TOKENS" in finish:
+        raise OutputError(f"Gemini {model} قطع الرد (MAX_TOKENS)", truncated=True)
+    text = (response.text or "").strip()
+    if not text:
+        raise OutputError(f"Gemini {model} رجّع رد فاضي (finish={finish or '?'})")
+    return text
+
+
+def _post_chat(url, key, payload, label, extra_headers=None) -> str:
+    import requests
+
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    if extra_headers:
+        headers.update(extra_headers)
+    r = requests.post(url, headers=headers, json=payload, timeout=REQUEST_TIMEOUT)
+    if r.status_code != 200:
+        raise RuntimeError(f"{label} HTTP {r.status_code}: {r.text[:200]}")
+    choice = (r.json().get("choices") or [{}])[0]
+    if choice.get("finish_reason") == "length":
+        raise OutputError(f"{label} قطع الرد (length)", truncated=True)
+    text = ((choice.get("message") or {}).get("content") or "").strip()
+    if not text:
+        raise OutputError(f"{label} رجّع رد فاضي")
+    return text
+
+
+def _groq_completion(system_prompt, user_message, budget, schema) -> str:
+    payload = {
+        "model": GROQ_MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message},
+        ],
+        "temperature": TEMPERATURE,
+        "max_completion_tokens": budget,
+        "reasoning_effort": "low",  # عشان التفكير مايأكلش الميزانية
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": "episode", "strict": True, "schema": schema},
+        },
+    }
+    return _post_chat("https://api.groq.com/openai/v1/chat/completions",
+                      GROQ_API_KEY, payload, "Groq")
+
+
+def _openrouter_completion(system_prompt, user_message, budget, keys_hint) -> str:
+    # json_object مش بيفرض مخطط، فبنكتب المفاتيح المطلوبة صراحة داخل التعليمات
+    payload = {
+        "model": OPENROUTER_MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt + "\n\n" + keys_hint},
+            {"role": "user", "content": user_message},
+        ],
+        "temperature": TEMPERATURE,
+        "max_tokens": budget,
+        "response_format": {"type": "json_object"},
+        "reasoning": {"effort": "low"},
+    }
+    return _post_chat("https://openrouter.ai/api/v1/chat/completions",
+                      OPENROUTER_API_KEY, payload, "OpenRouter")
+
+
+def build_providers(episode_schema=EPISODE_SCHEMA, to_gemini_schema=None):
+    """يبني السلسلة حسب المفاتيح المتاحة فقط (مفيش مزوّد بدون مفتاح)."""
+    schema = episode_schema["schema"]
+    gemini_schema = to_gemini_schema(schema) if to_gemini_schema else schema
+    keys_hint = ("أخرج كائن JSON واحدًا فقط، بدون أي نص قبله أو بعده، وبهذه المفاتيح بالضبط: "
+                 + ", ".join(sorted(REQUIRED_KEYS)))
+
+    providers = []
+    if GEMINI_API_KEY:
+        for m in GEMINI_MODELS:
+            providers.append(Provider(
+                f"gemini:{m}",
+                lambda sp, um, b, m=m: _gemini_completion(sp, um, b, m, gemini_schema)))
+    if GROQ_API_KEY:
+        providers.append(Provider(
+            f"groq:{GROQ_MODEL}",
+            lambda sp, um, b: _groq_completion(sp, um, b, schema)))
+    if OPENROUTER_API_KEY and OPENROUTER_MODEL:
+        providers.append(Provider(
+            f"openrouter:{OPENROUTER_MODEL}",
+            lambda sp, um, b: _openrouter_completion(sp, um, b, keys_hint)))
+    if not providers:
+        raise RuntimeError("مفيش أي مفتاح API متضبط (GEMINI_API_KEY / GROQ_API_KEY / OPENROUTER_API_KEY)")
+    return providers
+
+
+# ───────────────────────── القلب: توليد حلقة سليمة ─────────────────────────
+def generate_valid_episode(system_prompt, user_message, budget, providers, validate,
+                           sleep=time.sleep, clock=time.monotonic):
+    """يرجّع (الحلقة، اسم المزوّد). يرفع RuntimeError لو فشل الجميع."""
+    deadline = clock() + LLM_DEADLINE_SECONDS
+    errors = []
+
+    for prov in providers:
+        if prov.dead:
+            continue
+        cur_budget = budget
+        feedback = ""
+        transient_tries = 0
+        invalid_tries = 0
+
+        while True:
+            if clock() > deadline:
+                errors.append("تجاوزنا الحد الزمني الكلي للجولة")
+                raise RuntimeError(" | ".join(errors[-8:]))
+            try:
+                raw = prov.fn(system_prompt, user_message + feedback, cur_budget)
+                episode = parse_episode_json(raw)
+                validate(episode)  # الفحص جزء من النجاح
+                return episode, prov.label
+            except Exception as exc:  # noqa: BLE001
+                kind = classify(exc)
+                errors.append(f"{prov.label} [{kind}]: {str(exc)[:150]}")
+                print(f"⚠️ {errors[-1]}")
+
+                if kind in ("quota", "permanent"):
+                    prov.dead = True      # إعادة المحاولة مش هتفيد
+                    break
+
+                if kind == "invalid":
+                    invalid_tries += 1
+                    if invalid_tries >= LLM_INVALID_RETRIES:
+                        break
+                    if getattr(exc, "truncated", False):
+                        cur_budget = min(int(cur_budget * BUDGET_STEP), MAX_BUDGET)
+                    # نقول للموديل المشكلة بالتحديد بدل ما نكرر نفس الطلب
+                    feedback = (f"\n\n[ملاحظة على المحاولة السابقة: {getattr(exc, 'problem', str(exc))}. "
+                                "صحّح هذه النقطة تحديدًا وأعد الحلقة كاملة بصيغة JSON فقط.]")
+                    continue
+
+                # transient / rate / unknown: انتظار تصاعدي ثم إعادة
+                transient_tries += 1
+                if transient_tries >= LLM_RETRIES:
+                    break
+                sleep(_backoff(transient_tries))
+
+    raise RuntimeError("فشل كل المزوّدين: " + " | ".join(errors[-8:]))
+
+
+# ───────────────────────── اختيار النمط ورسالة المستخدم ─────────────────────────
+def pick_story_type() -> str:
+    """تبديل تلقائي بين النمطين حسب رقم التشغيل في GitHub Actions، أو فرض نمط عبر STORY_TYPE."""
+    forced = os.getenv("STORY_TYPE", "").strip()
+    if forced in STORY_TYPES:
+        return forced
+    try:
+        run = int(os.getenv("GITHUB_RUN_NUMBER", "0") or 0)
+    except ValueError:
+        run = 0
+    return STORY_TYPES[run % 2]
+
+
+def build_user_message(story_type, used_hooks=(), recent_regions=()) -> str:
+    kind_line = {
+        "true_case": "النمط المطلوب: story_type = true_case (حادثة حقيقية موثقة أو قضية معروفة أو أسطورة حضرية مذكورة كأسطورة).",
+        "sci_fi": "النمط المطلوب: story_type = sci_fi (خيال علمي رعب أصيل، لا يُقدَّم كحقيقة أبدًا).",
+    }[story_type]
+    hooks = "\n".join(f"- {h}" for h in list(used_hooks)[-40:]) or "- (لا يوجد)"
+    regions = "، ".join(list(recent_regions)[-5:]) or "لا يوجد"
+    return (
+        f"{kind_line}\n\n"
+        f"الهوكات المستخدمة سابقًا (ممنوع تكرار نفس الواقعة أو الفكرة بأي زاوية):\n{hooks}\n\n"
+        f"مناطق الحلقات الأخيرة (اختر منطقة مختلفة): {regions}\n\n"
+        "اكتب حلقة جديدة تمامًا وأخرج JSON فقط."
+    )
+
+
+def generate_episode(system_prompt, budget, validate, to_gemini_schema=None,
+                     used_hooks=(), recent_regions=(), rounds=2, cooldown=30):
+    """الواجهة اللي بيناديها main.py. جولتين بينهم راحة، وبعدها فشل صريح."""
+    story_type = pick_story_type()
+    user_message = build_user_message(story_type, used_hooks, recent_regions)
+
+    def _validate(ep):
+        validate(ep)
+        if ep.get("story_type") != story_type:
+            raise OutputError(f"story_type لازم يساوي {story_type}")
+
+    last_error = ""
+    for rnd in range(1, rounds + 1):
+        providers = build_providers(to_gemini_schema=to_gemini_schema)
+        try:
+            episode, label = generate_valid_episode(
+                system_prompt, user_message, budget, providers, _validate)
+            print(f"✅ الحلقة اتولّدت عبر {label} (النمط: {story_type})")
+            return episode
+        except Exception as exc:  # noqa: BLE001
+            last_error = str(exc)
+            print(f"⚠️ الجولة {rnd}/{rounds} فشلت: {last_error}")
+            if rnd < rounds:
+                time.sleep(cooldown)
+    raise RuntimeError(last_error)
