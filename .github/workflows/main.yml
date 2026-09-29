@@ -61,7 +61,7 @@ jobs:
       - name: Generate complete episode script
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: "gemini-2.5-flash"
+          GEMINI_MODEL: "gemini-3.8-flash"
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_MODEL: "nvidia/nemotron-3-super-120b-a12b:free"
           LLM_RETRIES: "1"
