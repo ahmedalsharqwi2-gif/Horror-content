@@ -1,1 +1,32 @@
+name: Arabic Guard CI
 
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  arabic-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Run Arabic guard tests
+        run: python -m unittest tests.test_arabic_guard -v
+
+      - name: Verify test module import
+        run: python -c "import tests.test_arabic_guard; print('test module import: OK')"
+
+      - name: Quick syntax check
+        run: python -m py_compile scripts/arabic_guard.py tests/test_arabic_guard.py
