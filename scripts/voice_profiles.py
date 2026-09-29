@@ -19,12 +19,12 @@ def choose_auto_profile(profiles: dict[str, Any], root: Path) -> str:
             episode = json.loads(episode_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             pass
-    text = f"{episode.get('title', '')} {episode.get('narration', '')}"
-    female = bool(re.search(r"(ملكة|امرأة|فتاة|طفلة|زوجة|أميرة|أم )", text))
     configured = [p.strip() for p in os.getenv("AUTO_VOICE_PROFILES", "").split(",") if p.strip()]
     candidates = [p for p in configured if p in profiles] or list(profiles)
-    if female and "egyptian_female" in candidates:
-        candidates = ["egyptian_female"]
+    # الرعب يستخدم أصواتًا ذكورية فقط، حتى لو احتوى النص على شخصية نسائية.
+    candidates = [p for p in candidates if p != "egyptian_female"]
+    if not candidates:
+        candidates = [p for p in profiles if p != "egyptian_female"]
     history_path = root / "state" / "used_clips.json"
     recent: list[str] = []
     if history_path.is_file():

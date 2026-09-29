@@ -44,7 +44,7 @@ VOICE = os.getenv("EDGE_TTS_VOICE", "").strip()
 VOICE_CANDIDATES = list(dict.fromkeys(
     item.strip() for item in os.getenv(
         "EDGE_TTS_VOICES",
-        "ar-EG-ShakirNeural,ar-SA-HamedNeural,ar-SA-ZariyahNeural",
+        "ar-EG-ShakirNeural,ar-SA-HamedNeural",
     ).split(",") if item.strip()
 ))
 TTS_ENGINE = os.getenv("TTS_ENGINE", "silma").strip().lower()
@@ -55,7 +55,7 @@ SILMA_REFERENCE_TEXT = os.getenv(
     "SILMA_REFERENCE_TEXT",
     "في عام 1943، بدأت خطة خداع عسكرية بوثيقة صغيرة، لكنها غيرت مسار معركة كاملة.",
 ).strip()
-SILMA_SPEED = float(os.getenv("SILMA_SPEED", "1.0"))
+SILMA_SPEED = float(os.getenv("SILMA_SPEED", "1.15"))
 SILMA_GUARD_ENABLED = os.getenv("SILMA_GUARD_ENABLED", "true").lower() == "true"
 SILMA_GUARD_MIN_MATCH_WORDS = int(os.getenv("SILMA_GUARD_MIN_MATCH_WORDS", "2"))
 RATE = os.getenv("EDGE_TTS_RATE", "-8%")
