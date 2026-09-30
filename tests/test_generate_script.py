@@ -31,6 +31,15 @@ class GenerateScriptTests(unittest.TestCase):
         }
         generate_script.validate_episode(episode)
 
+    def test_short_latin_noise_is_removed(self):
+        episode = {
+            "narration": ("ظهرت إشارة XJ في السماء ثم اختفت J. " * 30).strip(),
+            "hook": "إشارة غامضة ظهرت في الليل",
+            "visual_keywords": ["night radio telescope"] * 6,
+        }
+        generate_script.validate_episode(episode)
+        self.assertNotIn("XJ", episode["narration"])
+
     def test_canonical_min_min_pronunciation(self):
         self.assertEqual(normalize_min_min_pronunciation("بحيرة مِينَ مِين"), "بحيرة مِين مِين")
 
