@@ -81,15 +81,17 @@ jobs:
           GROQ_MODEL: "openai/gpt-oss-120b"
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_MODELS: "qwen/qwen3.8-27b:free,google/gemma-4-31b-it:free,nvidia/nemotron-3-super-120b-a12b:free"
-          PREFER_OPENROUTER: "true"
-          LLM_RETRIES: "4"
-          LLM_INVALID_RETRIES: "3"
+          # Gemini -> Groq first; OpenRouter is the last resort because its
+          # free quota may be exhausted and must not delay every episode.
+          PREFER_OPENROUTER: "false"
+          LLM_RETRIES: "2"
+          LLM_INVALID_RETRIES: "2"
           LLM_DEADLINE_SECONDS: "900"
           LLM_REQUEST_TIMEOUT: "120"
           NARRATION_WORDS_MIN: "230"
           NARRATION_WORDS_MAX: "320"
           LLM_INITIAL_BUDGET: "3200"
-          LLM_ROUNDS: "3"
+          LLM_ROUNDS: "1"
           LLM_ROUND_COOLDOWN: "45"
         run: python scripts/generate_script.py
 

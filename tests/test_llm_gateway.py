@@ -72,6 +72,20 @@ class LlmGatewayTests(unittest.TestCase):
             providers = llm_gateway.build_providers()
         self.assertEqual([p.label for p in providers], ["openrouter:model-a", "openrouter:model-b"])
 
+    def test_default_provider_order_puts_groq_before_openrouter(self):
+        with patch.object(llm_gateway, "GEMINI_API_KEY", "gemini-key"), \
+             patch.object(llm_gateway, "GEMINI_MODELS", ["gemini-model"]), \
+             patch.object(llm_gateway, "GROQ_API_KEY", "groq-key"), \
+             patch.object(llm_gateway, "GROQ_MODEL", "openai/gpt-oss-120b"), \
+             patch.object(llm_gateway, "OPENROUTER_API_KEY", "router-key"), \
+             patch.object(llm_gateway, "OPENROUTER_MODELS", ["router-model"]), \
+             patch.dict("os.environ", {"PREFER_OPENROUTER": "false"}):
+            providers = llm_gateway.build_providers()
+        self.assertEqual(
+            [p.label for p in providers],
+            ["gemini:gemini-model", "groq:openai/gpt-oss-120b", "openrouter:router-model"],
+        )
+
     def test_blocking_provider_call_has_hard_timeout(self):
         with self.assertRaises(ProviderTimeout):
             _run_with_timeout(lambda: time.sleep(2), 1, "test-provider")
