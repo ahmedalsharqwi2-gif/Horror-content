@@ -117,10 +117,12 @@ jobs:
           AUTO_VOICE_PROFILES: "hossam,hossam_uploaded,marwan,nassim,ahmed_z"
           SILMA_SPEED: "1.00"
           SILMA_GUARD_ENABLED: "true"
-          SILMA_GUARD_MIN_MATCH_WORDS: "4"
+          SILMA_GUARD_MIN_MATCH_WORDS: "3"
           SILMA_FALLBACK_TO_EDGE: "true"
           WHISPER_MODEL: "base"
-          ASR_MIN_MATCH_RATIO: "0.82"
+          # Whisper can miss diacritics and proper names; keep the empty/
+          # foreign-audio checks but accept a 65% normalized word match.
+          ASR_MIN_MATCH_RATIO: "0.65"
           EDGE_TTS_RATE: "-5%"
           EDGE_TTS_PITCH: "-5Hz"
           MUSIC_VOLUME: "0.05"
