@@ -99,7 +99,7 @@ jobs:
 
       - name: Arabic preflight gates (horror)
         env:
-          EDGE_TTS_VOICE: "ar-SA-HamedNeural"
+          EDGE_TTS_VOICE: "ar-SA-ZariyahNeural"
           TTS_ENGINE: "edge"
         run: |
           test -f state/current_episode.json || { echo "TEXT_GATE: episode artifact missing"; exit 1; }
@@ -113,7 +113,9 @@ jobs:
 
       - name: Generate complete narration with automatic SILMA horror voice and landscape subtitles
         env:
-          TTS_ENGINE: "silma"
+          TTS_ENGINE: "edge"
+          EDGE_TTS_VOICES: "ar-SA-ZariyahNeural"
+          EDGE_TTS_VOICE: "ar-SA-ZariyahNeural"
           SILMA_REFERENCE_PROFILE: "auto"
           SILMA_VOICE_PROFILES_FILE: "assets/voices/voice_profiles.json"
           AUTO_VOICE_PROFILES: "hossam,hossam_uploaded,marwan,nassim,ahmed_z"
@@ -125,8 +127,8 @@ jobs:
           # Whisper can miss diacritics and proper names; keep the empty/
           # foreign-audio checks but accept a 65% normalized word match.
           ASR_MIN_MATCH_RATIO: "0.65"
-          EDGE_TTS_RATE: "-5%"
-          EDGE_TTS_PITCH: "-5Hz"
+          EDGE_TTS_RATE: "-8%"
+          EDGE_TTS_PITCH: "-3Hz"
           MUSIC_VOLUME: "0.05"
         run: python scripts/generate_voice.py
 
