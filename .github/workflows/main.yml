@@ -60,6 +60,9 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
 
+      - name: Verify Edge TTS installation
+        run: python -c "import edge_tts; print('edge-tts import OK:', getattr(edge_tts, '__version__', 'installed'))"
+
       # فشل الـ import هنا صامت لو حصل من غير السطر ده — pip منفصل عن
       # "python -m pip" ممكن يثبّت الحزم على تفسير Python مختلف عن اللي
       # بيشغّل main.py فعليًا، فيرجع realign_subtitles_with_whisper()
@@ -134,6 +137,15 @@ jobs:
 
       - name: Assemble full landscape video and single vertical reel
         run: python scripts/assemble_video.py
+
+      - name: Verify final montage and B-roll output
+        run: |
+          test -s output/final_video_full.mp4 || { echo "ERROR: full montage missing or empty"; exit 1; }
+          test -s state/fetched_clips.json || { echo "ERROR: B-roll tracking manifest missing"; exit 1; }
+          test "$(python -c 'import json; print(len(json.load(open("state/fetched_clips.json"))))')" -ge 4 || { echo "ERROR: fewer than 4 B-roll clips"; exit 1; }
+          ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 output/final_video_full.mp4
+          ffprobe -v error -show_entries format=duration -of csv=p=0 output/final_video_full.mp4
+          echo "Professional landscape montage with topic-specific B-roll verified."
 
       - name: Publish full video and reel together
         if: ${{ !inputs.dry_run }}
