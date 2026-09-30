@@ -69,21 +69,21 @@ jobs:
       - name: Generate complete episode script
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODELS: "gemini-3.8-flash,gemini-3.7-flash"
+          GEMINI_MODELS: "gemini-3.8-flash,gemini-3.7-flash,gemini-2.5-flash"
           GEMINI_THINKING_BUDGET: "0"
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GROQ_MODEL: "openai/gpt-oss-120b"
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_MODEL: "google/gemini-2.5-flash"
-          LLM_RETRIES: "3"
-          LLM_INVALID_RETRIES: "2"
-          LLM_DEADLINE_SECONDS: "480"
+          OPENROUTER_MODELS: "google/gemini-2.5-flash,qwen/qwen3-32b"
+          LLM_RETRIES: "4"
+          LLM_INVALID_RETRIES: "3"
+          LLM_DEADLINE_SECONDS: "900"
           LLM_REQUEST_TIMEOUT: "120"
           NARRATION_WORDS_MIN: "230"
           NARRATION_WORDS_MAX: "320"
           LLM_INITIAL_BUDGET: "6000"
-          LLM_ROUNDS: "2"
-          LLM_ROUND_COOLDOWN: "30"
+          LLM_ROUNDS: "3"
+          LLM_ROUND_COOLDOWN: "45"
         run: python scripts/generate_script.py
 
       - name: Fetch landscape stock clips

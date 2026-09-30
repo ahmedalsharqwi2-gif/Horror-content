@@ -1,5 +1,7 @@
 import unittest
+from unittest.mock import patch
 
+from scripts import llm_gateway
 from scripts.llm_gateway import OutputError, make_validator, parse_episode_json
 
 
@@ -27,6 +29,14 @@ class LlmGatewayTests(unittest.TestCase):
         }
         with self.assertRaises(OutputError):
             make_validator()(episode)
+
+    def test_build_providers_rotates_openrouter_models(self):
+        with patch.object(llm_gateway, "GEMINI_API_KEY", ""), \
+             patch.object(llm_gateway, "GROQ_API_KEY", ""), \
+             patch.object(llm_gateway, "OPENROUTER_API_KEY", "test-key"), \
+             patch.object(llm_gateway, "OPENROUTER_MODELS", ["model-a", "model-b"]):
+            providers = llm_gateway.build_providers()
+        self.assertEqual([p.label for p in providers], ["openrouter:model-a", "openrouter:model-b"])
 
 
 if __name__ == "__main__":

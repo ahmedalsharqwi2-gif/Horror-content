@@ -47,6 +47,9 @@ GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "")
+OPENROUTER_MODELS = list(dict.fromkeys(
+    m.strip() for m in os.getenv("OPENROUTER_MODELS", OPENROUTER_MODEL).split(",") if m.strip()
+))
 
 # حدود طول السرد بالكلمات (الموديل بيقدّر الكلمات أدق بكثير من الثواني)
 WORDS_MIN = int(os.getenv("NARRATION_WORDS_MIN", "220"))
@@ -340,10 +343,10 @@ def _groq_completion(system_prompt, user_message, budget, schema) -> str:
                       GROQ_API_KEY, payload, "Groq")
 
 
-def _openrouter_completion(system_prompt, user_message, budget, keys_hint) -> str:
+def _openrouter_completion(system_prompt, user_message, budget, keys_hint, model=None) -> str:
     # json_object مش بيفرض مخطط، فبنكتب المفاتيح المطلوبة صراحة داخل التعليمات
     payload = {
-        "model": OPENROUTER_MODEL,
+        "model": model or OPENROUTER_MODEL,
         "messages": [
             {"role": "system", "content": system_prompt + "\n\n" + keys_hint},
             {"role": "user", "content": user_message},
@@ -374,10 +377,11 @@ def build_providers(episode_schema=EPISODE_SCHEMA, to_gemini_schema=None):
         providers.append(Provider(
             f"groq:{GROQ_MODEL}",
             lambda sp, um, b: _groq_completion(sp, um, b, schema)))
-    if OPENROUTER_API_KEY and OPENROUTER_MODEL:
-        providers.append(Provider(
-            f"openrouter:{OPENROUTER_MODEL}",
-            lambda sp, um, b: _openrouter_completion(sp, um, b, keys_hint)))
+    if OPENROUTER_API_KEY:
+        for m in OPENROUTER_MODELS:
+            providers.append(Provider(
+                f"openrouter:{m}",
+                lambda sp, um, b, m=m: _openrouter_completion(sp, um, b, keys_hint, model=m)))
     if not providers:
         raise RuntimeError("مفيش أي مفتاح API متضبط (GEMINI_API_KEY / GROQ_API_KEY / OPENROUTER_API_KEY)")
     return providers
