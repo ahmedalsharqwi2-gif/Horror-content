@@ -101,6 +101,15 @@ HARD_WORDS_DIACRITICS = {
     "رعب": "رُعب", "صرخة": "صَرخة",
     "خطى": "خُطى", "شبح": "شَبَح", "صراخ": "صُراخ", "دفن": "دَفَن",
 }
+MIN_MIN_PRONUNCIATION = "مِين مِين"
+
+
+def normalize_min_min_pronunciation(text: str) -> str:
+    """Canonicalize all common diacritic variants of Min Min for TTS."""
+    variants = ("مين مين", "مِين مِين", "مِينَ مِين", "مِين مِينَ", "مِينَ مِينَ")
+    for variant in variants:
+        text = text.replace(variant, MIN_MIN_PRONUNCIATION)
+    return text
 
 
 def select_edge_voice(episode: dict) -> str:
@@ -187,6 +196,7 @@ def apply_phonetic_hints(text: str, hints: list[dict]) -> str:
     ظهرت في مدخل تاني. المفروض phonetic تكون نفس الكلمة بالحروف الأساسية
     بالظبط مع إضافة تشكيل بس (شوف horror_system_prompt.md)، فـ
     strip_diacritics() بترجّعها زي الأصل تمامًا في الترجمة."""
+    text = normalize_min_min_pronunciation(text)
     for hint in sorted(hints, key=lambda h: len(str(h.get("word", ""))), reverse=True):
         word = str(hint.get("word", "")).strip()
         phonetic = str(hint.get("phonetic", "")).strip()

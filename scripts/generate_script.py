@@ -64,6 +64,12 @@ def looks_truncated(narration: str) -> bool:
     return not stripped or not stripped.endswith((".", "!", "؟", "?", "…", '"', "”", "»"))
 
 
+def looks_open_ended(narration: str) -> bool:
+    """Catch a narration whose final sentence is only an unanswered question."""
+    last = re.split(r"(?<=[.!؟?…])\s+", narration.strip())[-1].strip()
+    return last.endswith(("؟", "?")) and len(last.split()) >= 4
+
+
 def to_gemini_schema(schema: dict) -> dict:
     """Convert the local JSON schema to the Gemini SDK's schema format."""
     result = {"type": schema["type"].upper()}
@@ -110,6 +116,8 @@ def validate_episode(episode: dict) -> None:
         raise OutputError("حقل visual_keywords فاضي")
     if looks_truncated(narration):
         raise OutputError("نص narration شكله متقطوع", truncated=True)
+    if looks_open_ended(narration):
+        raise OutputError("النهاية سؤال مفتوح بلا كشف أو خاتمة")
 
 
 def generate_episode() -> dict:
