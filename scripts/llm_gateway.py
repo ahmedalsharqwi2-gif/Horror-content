@@ -415,6 +415,17 @@ def build_providers(episode_schema=EPISODE_SCHEMA, to_gemini_schema=None):
                  + ", ".join(sorted(REQUIRED_KEYS)))
 
     providers = []
+    prefer_openrouter = os.getenv("PREFER_OPENROUTER", "false").lower() == "true"
+
+    def add_openrouter() -> None:
+        if OPENROUTER_API_KEY:
+            for m in OPENROUTER_MODELS:
+                providers.append(Provider(
+                    f"openrouter:{m}",
+                    lambda sp, um, b, m=m: _openrouter_completion(sp, um, b, keys_hint, model=m)))
+
+    if prefer_openrouter:
+        add_openrouter()
     if GEMINI_API_KEY:
         for m in GEMINI_MODELS:
             providers.append(Provider(
@@ -424,11 +435,8 @@ def build_providers(episode_schema=EPISODE_SCHEMA, to_gemini_schema=None):
         providers.append(Provider(
             f"groq:{GROQ_MODEL}",
             lambda sp, um, b: _groq_completion(sp, um, b, schema)))
-    if OPENROUTER_API_KEY:
-        for m in OPENROUTER_MODELS:
-            providers.append(Provider(
-                f"openrouter:{m}",
-                lambda sp, um, b, m=m: _openrouter_completion(sp, um, b, keys_hint, model=m)))
+    if not prefer_openrouter:
+        add_openrouter()
     if not providers:
         raise RuntimeError("مفيش أي مفتاح API متضبط (GEMINI_API_KEY / GROQ_API_KEY / OPENROUTER_API_KEY)")
     return providers
@@ -458,6 +466,7 @@ def generate_valid_episode(system_prompt, user_message, budget, providers, valid
                 f"⏳ بدء طلب {prov.label} | المحاولة المؤقتة {transient_tries + 1}/"
                 f"{LLM_RETRIES} | مضى {int(call_started - (deadline - LLM_DEADLINE_SECONDS))}ث"
             )
+            episode = None
             try:
                 raw = prov.fn(system_prompt, user_message + feedback, cur_budget)
                 print(f"✅ وصل رد {prov.label} خلال {clock() - call_started:.1f}ث")
@@ -477,11 +486,27 @@ def generate_valid_episode(system_prompt, user_message, budget, providers, valid
                     invalid_tries += 1
                     if invalid_tries >= LLM_INVALID_RETRIES:
                         break
-                    if getattr(exc, "truncated", False):
-                        cur_budget = min(int(cur_budget * BUDGET_STEP), MAX_BUDGET)
-                    # نقول للموديل المشكلة بالتحديد بدل ما نكرر نفس الطلب
-                    feedback = (f"\n\n[ملاحظة على المحاولة السابقة: {getattr(exc, 'problem', str(exc))}. "
-                                "صحّح هذه النقطة تحديدًا وأعد الحلقة كاملة بصيغة JSON فقط.]")
+                    if getattr(exc, "truncated", False) or "قصير" in str(exc):
+                        cur_budget = min(max(cur_budget + 256, int(cur_budget * BUDGET_STEP)), MAX_BUDGET)
+                    problem = getattr(exc, "problem", str(exc))
+                    prior = ""
+                    if isinstance(episode, dict):
+                        prior_narration = str(episode.get("narration", "")).strip()
+                        prior_words = len(prior_narration.split())
+                        missing_words = max(0, WORDS_MIN - prior_words)
+                        missing_keys = sorted(REQUIRED_KEYS - set(episode.keys()))
+                        prior = (
+                            f"\nالناتج السابق كان يحتوي {prior_words} كلمة في narration؛ "
+                            f"أضف {missing_words} كلمة جديدة على الأقل، وانسخ السرد السابق ثم أكمله "
+                            "بمعلومات ومشاهد جديدة من دون تكرار المقدمة.\n"
+                            f"النarration السابق:\n{prior_narration}\n"
+                            f"الحقول الناقصة التي يجب إرجاعها: {missing_keys or 'لا يوجد'}."
+                        )
+                    feedback = (
+                        f"\n\n[تصحيح إلزامي: {problem}. أعد كائن JSON كاملًا بالمفاتيح كلها. "
+                        f"يجب أن يكون narration بين {WORDS_MIN} و{WORDS_MAX} كلمة فعلية."
+                        f"{prior}\nلا تكتب أي شرح خارج JSON.]"
+                    )
                     continue
 
                 # transient / rate / unknown: انتظار تصاعدي ثم إعادة

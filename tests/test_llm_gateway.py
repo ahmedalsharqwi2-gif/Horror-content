@@ -5,14 +5,41 @@ from unittest.mock import patch
 from scripts import llm_gateway
 from scripts.llm_gateway import (
     OutputError,
+    Provider,
     ProviderTimeout,
     _run_with_timeout,
+    generate_valid_episode,
+    make_validator,
     make_validator,
     parse_episode_json,
 )
 
 
 class LlmGatewayTests(unittest.TestCase):
+    def test_short_episode_retry_includes_prior_narration_and_missing_words(self):
+        short = {
+            "title": "x", "hook": "هوك", "region": "مكان", "story_type": "true_case",
+            "basis": "مصدر", "narration": "كلمة " * 10,
+            "visual_keywords": ["night scene"] * 6,
+            "caption": "قصة #رعب", "phonetic_hints": [],
+        }
+        full = dict(short, narration="كلمة " * 230)
+        calls = []
+
+        # Use JSON so parse_episode_json receives a real object.
+        import json
+        def json_provider(_system, user, _budget):
+            calls.append(user)
+            return json.dumps(short if len(calls) == 1 else full, ensure_ascii=False)
+
+        episode, label = generate_valid_episode(
+            "system", "request", 1000, [Provider("test", json_provider)],
+            make_validator(), sleep=lambda _seconds: None,
+        )
+        self.assertEqual(label, "test")
+        self.assertEqual(len(episode["narration"].split()), 230)
+        self.assertIn("كلمة", calls[1])
+        self.assertIn("أضف", calls[1])
     def test_parse_episode_json_removes_fence_and_think_block(self):
         raw = '<think>internal</think>\n```json\n{"title": "x"}\n```'
         self.assertEqual(parse_episode_json(raw), {"title": "x"})
