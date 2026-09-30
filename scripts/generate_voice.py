@@ -62,7 +62,7 @@ RATE = os.getenv("EDGE_TTS_RATE", "-8%")
 PITCH = os.getenv("EDGE_TTS_PITCH", "-5Hz")
 VOLUME = "+0%"
 MUSIC_VOLUME = float(os.getenv("MUSIC_VOLUME", "0.07"))
-WORDS_PER_CAPTION_CHUNK = 4
+WORDS_PER_CAPTION_CHUNK = int(os.getenv("WORDS_PER_CAPTION_CHUNK", "6"))
 VIDEO_W = 1920
 VIDEO_H = 1080
 
