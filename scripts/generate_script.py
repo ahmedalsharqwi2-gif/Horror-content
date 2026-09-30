@@ -105,22 +105,22 @@ def validate_episode(episode: dict) -> None:
     """Project-specific checks layered on top of the gateway's structural checks."""
     narration = str(episode.get("narration", "")).strip()
     arabic_issues = validate_narration(narration)
-    short_foreign_noise = all(
-        issue.kind == "foreign_script" and len(str(issue.sample).strip()) <= 3
-        for issue in arabic_issues
-        if issue.kind == "foreign_script"
-    )
+    foreign_issues = [issue for issue in arabic_issues if issue.kind == "foreign_script"]
+    # LLMs sometimes leak an English place/model token into an otherwise
+    # valid Arabic narration. Remove Latin tokens and continue; the separate
+    # Arabic-density guard still rejects genuinely non-Arabic scripts.
+    has_foreign_noise = bool(foreign_issues)
     blocking_issues = [
         issue for issue in arabic_issues
         if issue.kind not in {"digit"}
-        and not (issue.kind == "foreign_script" and short_foreign_noise)
+        and issue.kind != "foreign_script"
     ]
     digit_issues = [issue for issue in arabic_issues if issue.kind == "digit"]
-    foreign_noise = [issue for issue in arabic_issues if issue.kind == "foreign_script" and short_foreign_noise]
+    foreign_noise = foreign_issues
     if digit_issues:
         print(f"⚠️ أرقام داخل narration ({len(digit_issues)})؛ سيتم نطقها كما هي")
     if foreign_noise:
-        narration = re.sub(r"(?<!\w)[A-Za-z]{1,3}(?!\w)", "", narration)
+        narration = re.sub(r"(?<!\w)[A-Za-z][A-Za-z'-]*(?!\w)", "", narration)
         episode["narration"] = re.sub(r"\s{2,}", " ", narration).strip()
         print(f"⚠️ رموز لاتينية قصيرة داخل narration ({len(foreign_noise)})؛ تم حذفها")
     if blocking_issues:
