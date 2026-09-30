@@ -23,6 +23,14 @@ class GenerateScriptTests(unittest.TestCase):
         self.assertTrue(generate_script.looks_open_ended("بدأت القصة هنا. ماذا حدث بعد ذلك؟"))
         self.assertFalse(generate_script.looks_open_ended("بدأت القصة هنا. ثم انطفأ الضوء وانتهى كل شيء."))
 
+    def test_digits_are_nonfatal_in_episode_validation(self):
+        episode = {
+            "narration": ("في عام 1996 ظهرت إشارة غامضة ثم اختفت. " * 30).strip(),
+            "hook": "إشارة غامضة ظهرت في الليل",
+            "visual_keywords": ["night radio telescope"] * 6,
+        }
+        generate_script.validate_episode(episode)
+
     def test_canonical_min_min_pronunciation(self):
         self.assertEqual(normalize_min_min_pronunciation("بحيرة مِينَ مِين"), "بحيرة مِين مِين")
 

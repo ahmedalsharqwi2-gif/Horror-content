@@ -105,8 +105,12 @@ def validate_episode(episode: dict) -> None:
     """Project-specific checks layered on top of the gateway's structural checks."""
     narration = str(episode.get("narration", "")).strip()
     arabic_issues = validate_narration(narration)
-    if arabic_issues:
-        raise OutputError(format_feedback(arabic_issues))
+    blocking_issues = [issue for issue in arabic_issues if issue.kind != "digit"]
+    digit_issues = [issue for issue in arabic_issues if issue.kind == "digit"]
+    if digit_issues:
+        print(f"⚠️ أرقام داخل narration ({len(digit_issues)})؛ سيتم نطقها كما هي")
+    if blocking_issues:
+        raise OutputError(format_feedback(blocking_issues))
     red_flag = find_content_red_flag(narration)
     if red_flag:
         raise OutputError(f"النص يحتوي مصطلحًا مرفوضًا: {red_flag}")
