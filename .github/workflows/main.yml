@@ -78,7 +78,7 @@ jobs:
           GEMINI_MODELS: "gemini-3.8-flash,gemini-3.7-flash"
           GEMINI_THINKING_BUDGET: "0"
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          GROQ_MODEL: "${{ vars.GROQ_MODEL || 'openai/gpt-oss-120b' }}"
+          GROQ_MODEL: "openai/gpt-oss-120b"
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_MODELS: "qwen/qwen3.8-27b:free,google/gemma-4-31b-it:free,nvidia/nemotron-3-super-120b-a12b:free"
           PREFER_OPENROUTER: "true"
