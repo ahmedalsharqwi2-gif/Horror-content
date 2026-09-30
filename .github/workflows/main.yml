@@ -88,8 +88,10 @@ jobs:
           LLM_INVALID_RETRIES: "2"
           LLM_DEADLINE_SECONDS: "900"
           LLM_REQUEST_TIMEOUT: "120"
-          NARRATION_WORDS_MIN: "230"
-          NARRATION_WORDS_MAX: "320"
+          # Short, complete Arabic episodes are valid; do not reject a
+          # coherent 180–360 word script and trigger another expensive LLM call.
+          NARRATION_WORDS_MIN: "180"
+          NARRATION_WORDS_MAX: "360"
           LLM_INITIAL_BUDGET: "3200"
           LLM_ROUNDS: "1"
           LLM_ROUND_COOLDOWN: "45"
