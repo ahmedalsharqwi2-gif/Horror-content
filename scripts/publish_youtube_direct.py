@@ -128,11 +128,9 @@ def load_title_and_description() -> tuple[str, str]:
         sys.exit(f"state/current_episode.json غير موجود: {EPISODE_PATH}")
     episode = json.loads(EPISODE_PATH.read_text(encoding="utf-8"))
     title = str(episode.get("title", "Horror Episode")).strip()[:100]
-    caption = str(episode.get("caption", "")).strip()
-    if not caption:
-        sys.exit("current_episode.json لا يحتوي caption.")
+    caption = str(episode.get("caption", "")).strip() or title
     # وصف يوتيوب بيسمح بحد أقصى 5000 حرف، الكابشن الحالي عادة أقصر بكتير.
-    description = caption[:5000]
+    description = f"{caption[:4900]}\n\n#رعب #قصص_رعب #غموض".strip()
     return title, description
 
 

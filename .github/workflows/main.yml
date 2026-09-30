@@ -13,6 +13,12 @@ on:
     # تستخدم نفس FULL_VIDEO_DELAY_HOURS.
     - cron: "30 13 * * *"
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build and validate without publishing externally"
+        required: false
+        default: false
+        type: boolean
 
 # Actions v5/v6 already target Node.js 24. Keep this explicit so GitHub does
 # not fall back to the deprecated Node.js 20 runtime for any transitive action.
@@ -69,19 +75,19 @@ jobs:
       - name: Generate complete episode script
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODELS: "gemini-3.8-flash,gemini-3.7-flash,gemini-2.5-flash"
+          GEMINI_MODELS: "gemini-3.8-flash,gemini-3.7-flash"
           GEMINI_THINKING_BUDGET: "0"
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GROQ_MODEL: "openai/gpt-oss-120b"
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_MODELS: "google/gemini-2.5-flash,qwen/qwen3-32b"
+          OPENROUTER_MODELS: "qwen/qwen3-32b"
           LLM_RETRIES: "4"
           LLM_INVALID_RETRIES: "3"
           LLM_DEADLINE_SECONDS: "900"
           LLM_REQUEST_TIMEOUT: "120"
           NARRATION_WORDS_MIN: "230"
           NARRATION_WORDS_MAX: "320"
-          LLM_INITIAL_BUDGET: "6000"
+          LLM_INITIAL_BUDGET: "3200"
           LLM_ROUNDS: "3"
           LLM_ROUND_COOLDOWN: "45"
         run: python scripts/generate_script.py
@@ -112,6 +118,7 @@ jobs:
         run: python scripts/assemble_video.py
 
       - name: Publish full video and reel together
+        if: ${{ !inputs.dry_run }}
         env:
           BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
           BUFFER_CHANNEL_ID: ${{ secrets.BUFFER_CHANNEL_ID }}
@@ -131,6 +138,7 @@ jobs:
       # FULL_VIDEO_DELAY_HOURS لازم تكون نفس قيمة الخطوة اللي فاتت، عشان
       # يوتيوب ينشر في نفس توقيت باقي المنصات (والريل) مساءً.
       - name: Publish full video directly to YouTube
+        if: ${{ !inputs.dry_run }}
         env:
           YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
