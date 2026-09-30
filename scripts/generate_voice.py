@@ -71,6 +71,7 @@ VIDEO_H = 1080
 # والدقة على معالج عادي؛ يمكن رفعه لـ "small" لدقة أعلى مقابل وقت أطول
 # عبر متغير البيئة WHISPER_MODEL.
 WHISPER_MODEL_SIZE = os.getenv("WHISPER_MODEL", "base")
+ASR_MIN_MATCH_RATIO = float(os.getenv("ASR_MIN_MATCH_RATIO", "0.82"))
 
 VOICE_AUDIO = CLIPS_DIR / "narration_voice.mp3"
 FINAL_AUDIO = CLIPS_DIR / "narration_with_music.mp3"
@@ -249,6 +250,38 @@ def _norm_arabic_words(text: str) -> list[str]:
     return [w for w in text.lower().split() if w]
 
 
+def _transcribe_arabic_words(audio_path: Path) -> list[str]:
+    """Return normalized Arabic words across faster-whisper API variants."""
+    from faster_whisper import WhisperModel
+
+    model = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8")
+    result = model.transcribe(
+        str(audio_path), language="ar", word_timestamps=False, vad_filter=False
+    )
+    # faster-whisper releases return (segments, info); tolerate wrappers that
+    # return only the iterable so an API shape change cannot silently disable
+    # the pronunciation gate.
+    segments = result[0] if isinstance(result, (tuple, list)) else result
+    return _norm_arabic_words(" ".join(getattr(seg, "text", "") or "" for seg in segments))
+
+
+def assert_audio_matches_script(audio_path: Path, script_text: str) -> float:
+    """Fail closed when ASR cannot hear the Arabic script that was generated."""
+    expected = _norm_arabic_words(script_text)
+    heard = _transcribe_arabic_words(audio_path)
+    if not expected or not heard:
+        raise RuntimeError("بوابة ASR لم تحصل على كلمات عربية من النص أو الصوت")
+    matcher = difflib.SequenceMatcher(None, expected, heard, autojunk=False)
+    matched = sum(block.size for block in matcher.get_matching_blocks())
+    ratio = matched / len(expected)
+    print(f"🎧 بوابة ASR العربية: {matched}/{len(expected)} كلمة مطابقة ({ratio:.1%})")
+    if ratio < ASR_MIN_MATCH_RATIO:
+        raise RuntimeError(
+            f"تطابق النطق العربي منخفض: {ratio:.1%}، المطلوب {ASR_MIN_MATCH_RATIO:.1%}"
+        )
+    return ratio
+
+
 def detect_silma_reference_leak(audio_path: Path) -> str | None:
     """Transcribe audio and reject a contiguous phrase copied from SILMA reference."""
     if not SILMA_GUARD_ENABLED or not SILMA_REFERENCE_TEXT:
@@ -402,9 +435,10 @@ def align_words_with_whisper(audio_path: Path, script_words: list[str]) -> list[
     from faster_whisper import WhisperModel
 
     model = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8")
-    segments, _ = model.transcribe(
+    result = model.transcribe(
         str(audio_path), language="ar", word_timestamps=True, vad_filter=False,
     )
+    segments = result[0] if isinstance(result, (tuple, list)) else result
 
     whisper_words: list[tuple[str, float, float]] = []
     for segment in segments:
@@ -496,11 +530,11 @@ def synthesize_voice(voice_text: str) -> None:
     # وبعلامات الترقيم لا تزال ملتصقة — two_lines() تحذفها وقت العرض).
     display_words = strip_diacritics(voice_text).split()
 
+    assert_audio_matches_script(VOICE_AUDIO, voice_text)
     try:
         all_word_events = align_words_with_whisper(VOICE_AUDIO, display_words)
     except Exception as exc:  # noqa: BLE001
-        print(f"⚠️ فشلت محاذاة Whisper ({exc}) — الرجوع لتوقيت edge-tts الافتراضي.")
-        all_word_events = _build_word_events_from_edge_tts(segments)
+        raise RuntimeError(f"فشلت محاذاة Whisper بعد نجاح بوابة ASR: {exc}") from exc
 
     if not all_word_events:
         sys.exit("❌ تعذر إنشاء توقيت الترجمة.")

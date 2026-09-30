@@ -16,6 +16,7 @@ import json
 import os
 import random
 import re
+import signal
 import time
 from dataclasses import dataclass
 from typing import Callable, Optional
@@ -106,6 +107,44 @@ class OutputError(Exception):
         self.truncated = truncated
 
 
+class ProviderTimeout(TimeoutError):
+    """A provider call exceeded the hard wall-clock limit."""
+
+
+def _run_with_timeout(fn: Callable, timeout_seconds: int, label: str):
+    """Run a blocking provider call with a real process-level wall clock.
+
+    The Gemini SDK call previously had no timeout at all: the outer deadline was
+    checked only before entering the SDK, so a stuck socket could keep Actions
+    alive indefinitely. GitHub runners are Linux and execute this CLI on the
+    main thread, making SIGALRM a reliable last-resort circuit breaker. If a
+    caller embeds the gateway in a non-main thread, we still execute normally;
+    the workflow-level timeout remains the final guard in that unusual case.
+    """
+    if timeout_seconds <= 0:
+        return fn()
+    try:
+        previous_handler = signal.getsignal(signal.SIGALRM)
+        previous_timer = signal.getitimer(signal.ITIMER_REAL)
+
+        def _alarm_handler(_signum, _frame):
+            raise ProviderTimeout(f"{label} timed out after {timeout_seconds}s")
+
+        signal.signal(signal.SIGALRM, _alarm_handler)
+    except (ValueError, AttributeError):
+        # Signals are unavailable outside the main interpreter thread.
+        return fn()
+
+    signal.setitimer(signal.ITIMER_REAL, float(timeout_seconds))
+    try:
+        return fn()
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
+        if previous_timer[0] > 0:
+            signal.setitimer(signal.ITIMER_REAL, *previous_timer)
+
+
 QUOTA_MARKERS = ("PerDay", "per day", "daily limit", "insufficient_quota")
 RATE_MARKERS = ("429", "RESOURCE_EXHAUSTED", "rate limit", "rate_limit")
 TRANSIENT_MARKERS = ("500", "502", "503", "504", "UNAVAILABLE", "overloaded",
@@ -124,6 +163,8 @@ def _has(msg: str, markers) -> bool:
 
 def classify(exc: Exception) -> str:
     """يرجّع: invalid | quota | rate | transient | permanent | unknown"""
+    if isinstance(exc, ProviderTimeout):
+        return "transient"
     if isinstance(exc, OutputError):
         return "invalid"
     msg = str(exc)
@@ -285,11 +326,17 @@ def _gemini_completion(system_prompt, user_message, budget, model, gemini_schema
         )
 
     try:
-        response = _call(GEMINI_THINKING_BUDGET >= 0)
+        response = _run_with_timeout(
+            lambda: _call(GEMINI_THINKING_BUDGET >= 0),
+            REQUEST_TIMEOUT,
+            f"Gemini {model}",
+        )
     except Exception as exc:  # noqa: BLE001
         # بعض الموديلات ما بتقبلش إعداد التفكير: نعيد بدونه بدل ما نخسر الموديل كله
-        if "thinking" in str(exc).lower():
-            response = _call(False)
+        if "thinking" in str(exc).lower() and not isinstance(exc, ProviderTimeout):
+            response = _run_with_timeout(
+                lambda: _call(False), REQUEST_TIMEOUT, f"Gemini {model}"
+            )
         else:
             raise
 
@@ -406,8 +453,14 @@ def generate_valid_episode(system_prompt, user_message, budget, providers, valid
             if clock() > deadline:
                 errors.append("تجاوزنا الحد الزمني الكلي للجولة")
                 raise RuntimeError(" | ".join(errors[-8:]))
+            call_started = clock()
+            print(
+                f"⏳ بدء طلب {prov.label} | المحاولة المؤقتة {transient_tries + 1}/"
+                f"{LLM_RETRIES} | مضى {int(call_started - (deadline - LLM_DEADLINE_SECONDS))}ث"
+            )
             try:
                 raw = prov.fn(system_prompt, user_message + feedback, cur_budget)
+                print(f"✅ وصل رد {prov.label} خلال {clock() - call_started:.1f}ث")
                 episode = parse_episode_json(raw)
                 validate(episode)  # الفحص جزء من النجاح
                 return episode, prov.label

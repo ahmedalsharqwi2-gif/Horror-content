@@ -1,8 +1,15 @@
+import time
 import unittest
 from unittest.mock import patch
 
 from scripts import llm_gateway
-from scripts.llm_gateway import OutputError, make_validator, parse_episode_json
+from scripts.llm_gateway import (
+    OutputError,
+    ProviderTimeout,
+    _run_with_timeout,
+    make_validator,
+    parse_episode_json,
+)
 
 
 class LlmGatewayTests(unittest.TestCase):
@@ -37,6 +44,10 @@ class LlmGatewayTests(unittest.TestCase):
              patch.object(llm_gateway, "OPENROUTER_MODELS", ["model-a", "model-b"]):
             providers = llm_gateway.build_providers()
         self.assertEqual([p.label for p in providers], ["openrouter:model-a", "openrouter:model-b"])
+
+    def test_blocking_provider_call_has_hard_timeout(self):
+        with self.assertRaises(ProviderTimeout):
+            _run_with_timeout(lambda: time.sleep(2), 1, "test-provider")
 
 
 if __name__ == "__main__":
