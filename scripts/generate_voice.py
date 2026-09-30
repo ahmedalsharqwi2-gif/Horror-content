@@ -367,7 +367,7 @@ def ass_time(seconds: float) -> str:
 def two_lines(words: list[str]) -> str:
     words = [word.translate(DISPLAY_PUNCTUATION).strip() for word in words]
     words = [word for word in words if word]
-    if len(words) <= 2:
+    if len(words) <= 3:
         return "\u200f" + " ".join(words)
     midpoint = (len(words) + 1) // 2
     # \N هو كسر سطر ASS، أما U+200F فهو حرف اتجاه غير مرئي. لا نستخدم
@@ -457,8 +457,10 @@ def align_words_with_whisper(audio_path: Path, script_words: list[str]) -> list[
 
     matcher = difflib.SequenceMatcher(None, script_norm, whisper_norm, autojunk=False)
     timings: list[dict | None] = [None] * len(script_words)
-    for _tag, i1, i2, j1, j2 in matcher.get_matching_blocks():
-        for k in range(i2 - i1):
+    for block in matcher.get_matching_blocks():
+        i1, i2 = block.a, block.a + block.size
+        j1 = block.b
+        for k in range(block.size):
             if i1 + k >= len(script_words) or j1 + k >= len(whisper_words):
                 continue
             _, start, end = whisper_words[j1 + k]
