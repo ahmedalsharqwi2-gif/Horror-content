@@ -285,13 +285,17 @@ def make_validator(find_content_red_flag: Optional[Callable] = None,
         if "#" not in str(ep["caption"]):
             raise OutputError("caption من غير هاشتاجات")
 
+        valid_hints = []
         for h in ep["phonetic_hints"]:
             if not isinstance(h, dict) or "word" not in h or "phonetic" not in h:
-                raise OutputError("phonetic_hints بصيغة غلط")
-            if strip_tashkeel(h["phonetic"]) != h["word"]:
-                raise OutputError(f"phonetic لازم يطابق word بعد حذف التشكيل: {h['word']}")
-            if h["word"] not in plain:
-                raise OutputError(f"الكلمة {h['word']} مش موجودة في narration")
+                print("⚠️ phonetic_hints غير صالحة؛ سيتم تجاهلها والمتابعة بالنص الطبيعي")
+                continue
+            word, phonetic = str(h["word"]).strip(), str(h["phonetic"]).strip()
+            if not word or not phonetic or strip_tashkeel(phonetic) != word or word not in plain:
+                print(f"⚠️ تلميح نطق غير قابل للتحقق ({word or 'فارغ'})؛ سيتم تجاهله")
+                continue
+            valid_hints.append({"word": word, "phonetic": phonetic})
+        ep["phonetic_hints"] = valid_hints
 
     return validate
 

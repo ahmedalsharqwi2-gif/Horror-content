@@ -64,6 +64,21 @@ class LlmGatewayTests(unittest.TestCase):
         with self.assertRaises(OutputError):
             make_validator()(episode)
 
+    def test_invalid_phonetic_hint_is_nonfatal(self):
+        episode = {
+            "title": "اختبار",
+            "hook": "إشارة غريبة وصلت من السماء",
+            "region": "أتاكاما",
+            "story_type": "true_case",
+            "basis": "تقرير علمي منشور",
+            "narration": " ".join(["إشارة"] * 230) + ".",
+            "visual_keywords": ["night sky radio telescope"] * 6,
+            "caption": "قصة غامضة #رعب",
+            "phonetic_hints": [{"word": "Flannan", "phonetic": "فلانان"}],
+        }
+        make_validator()(episode)
+        self.assertEqual(episode["phonetic_hints"], [])
+
     def test_build_providers_rotates_openrouter_models(self):
         with patch.object(llm_gateway, "GEMINI_API_KEY", ""), \
              patch.object(llm_gateway, "GROQ_API_KEY", ""), \
