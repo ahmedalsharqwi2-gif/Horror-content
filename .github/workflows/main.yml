@@ -41,7 +41,7 @@ jobs:
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -154,6 +154,12 @@ jobs:
             --expected landscape \
             --min-clips 4
 
+      - name: Reserve unique topic before external publication
+        if: ${{ !inputs.dry_run }}
+        env:
+          TOPIC_HISTORY_COMMIT: "true"
+        run: python scripts/topic_history.py reserve --file state/topic_history.json --episode state/current_episode.json
+
       - name: Publish full video and reel together
         if: ${{ !inputs.dry_run }}
         env:
@@ -184,6 +190,12 @@ jobs:
           FULL_VIDEO_DELAY_HOURS: "8"
         run: python scripts/publish_youtube_direct.py
 
+      - name: Mark topic as published in repository history
+        if: ${{ !inputs.dry_run }}
+        env:
+          TOPIC_HISTORY_COMMIT: "true"
+        run: python scripts/topic_history.py mark-published --file state/topic_history.json --episode state/current_episode.json
+
       # تحذير مبكر قبل انتهاء صلاحية YT_REFRESH_TOKEN (7 أيام لتطبيق في
       # وضع Testing عند Google) — بيفتح GitHub Issue قبل الموعد بأيام
       # أمان بدل ما ننتظر فشل النشر فعليًا. يشتغل دايمًا (always())، حتى
@@ -197,7 +209,7 @@ jobs:
 
       - name: Upload generated media artifacts
         continue-on-error: true
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: horror-episode-media-${{ github.run_id }}
           path: |

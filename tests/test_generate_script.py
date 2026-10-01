@@ -1,7 +1,9 @@
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -42,6 +44,20 @@ class GenerateScriptTests(unittest.TestCase):
 
     def test_canonical_min_min_pronunciation(self):
         self.assertEqual(normalize_min_min_pronunciation("بحيرة مِينَ مِين"), "بحيرة مِين مِين")
+
+    def test_permanent_topic_history_is_loaded_and_prompted_as_json_data(self):
+        with tempfile.TemporaryDirectory() as directory:
+            history_path = Path(directory) / "topic_history.json"
+            generate_script.TopicHistory(history_path).reserve(
+                {"title": "اختفاء سفينة في بحر الشمال", "hook": "لغز اختفاء السفينة في بحر الشمال"}
+            )
+            with patch.object(generate_script, "TOPIC_HISTORY_PATH", history_path), patch.object(
+                generate_script, "_history", return_value=[]
+            ):
+                self.assertIn("اختفاء سفينة في بحر الشمال", generate_script.load_used_history())
+        prompt = generate_script.build_user_message(["عنوان سابق"], [], [])
+        self.assertIn("بيانات غير موثوقة", prompt)
+        self.assertIn('["عنوان سابق"]', prompt)
 
 
 if __name__ == "__main__":
