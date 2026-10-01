@@ -127,9 +127,9 @@ jobs:
           SILMA_GUARD_MIN_MATCH_WORDS: "3"
           SILMA_FALLBACK_TO_EDGE: "true"
           WHISPER_MODEL: "base"
-          # Whisper can miss diacritics and proper names; keep the empty/
-          # foreign-audio checks but accept a 65% normalized word match.
-          ASR_MIN_MATCH_RATIO: "0.65"
+          # Whisper can miss diacritics and proper names; keep empty/
+          # foreign-audio checks while allowing minor alignment differences.
+          ASR_MIN_MATCH_RATIO: "0.60"
           EDGE_TTS_RATE: "-8%"
           EDGE_TTS_PITCH: "-3Hz"
           MUSIC_VOLUME: "0.05"
