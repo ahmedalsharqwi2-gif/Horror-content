@@ -152,7 +152,7 @@ QUOTA_MARKERS = ("PerDay", "per day", "daily limit", "insufficient_quota")
 RATE_MARKERS = ("429", "RESOURCE_EXHAUSTED", "rate limit", "rate_limit")
 TRANSIENT_MARKERS = ("500", "502", "503", "504", "UNAVAILABLE", "overloaded",
                      "timed out", "timeout", "temporarily", "connection")
-PERMANENT_MARKERS = ("400", "401", "403", "404", "PERMISSION_DENIED",
+PERMANENT_MARKERS = ("400", "401", "402", "403", "404", "PERMISSION_DENIED",
                      "INVALID_ARGUMENT", "NOT_FOUND", "API key", "is not set")
 
 
@@ -460,12 +460,14 @@ def generate_valid_episode(system_prompt, user_message, budget, providers, valid
     """يرجّع (الحلقة، اسم المزوّد). يرفع RuntimeError لو فشل الجميع."""
     deadline = clock() + LLM_DEADLINE_SECONDS
     errors = []
+    provider_feedback = ""
 
     for prov in providers:
         if prov.dead:
             continue
         cur_budget = budget
-        feedback = ""
+        # لا نرسل نفس الموضوع للمزوّد التالي بعد رفضه كتكرار.
+        feedback = provider_feedback
         transient_tries = 0
         invalid_tries = 0
 
@@ -519,6 +521,12 @@ def generate_valid_episode(system_prompt, user_message, budget, providers, valid
                         f"يجب أن يكون narration بين {WORDS_MIN} و{WORDS_MAX} كلمة فعلية."
                         f"{prior}\nلا تكتب أي شرح خارج JSON.]"
                     )
+                    if any(marker in problem.lower() for marker in ("مكرر", "قريب جدًا", "duplicate", "similar")):
+                        feedback += (
+                            "\nهذا الموضوع مرفوض نهائيًا؛ اختر حادثة أو فكرة أو منطقة مختلفة جذريًا، "
+                            "ولا تعِد صياغة أي عنوان أو واقعة من القائمة السابقة."
+                        )
+                    provider_feedback = feedback
                     continue
 
                 # transient / unknown: انتظار تصاعدي ثم إعادة

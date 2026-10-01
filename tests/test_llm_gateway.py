@@ -132,6 +132,28 @@ class LlmGatewayTests(unittest.TestCase):
         self.assertEqual(label, "next")
         self.assertEqual(calls, ["rate", "next"])
 
+    def test_credit_error_is_classified_as_permanent(self):
+        self.assertEqual(llm_gateway.classify(RuntimeError("OpenRouter HTTP 402")), "permanent")
+
+    def test_duplicate_feedback_is_carried_to_next_provider(self):
+        calls = []
+
+        def duplicate(_system, user, _budget):
+            calls.append(user)
+            raise OutputError("الموضوع مكرر أو قريب جدًا من موضوع سابق")
+
+        def next_provider(_system, user, _budget):
+            calls.append(user)
+            return '{"title":"new"}'
+
+        episode, label = generate_valid_episode(
+            "system", "request", 1000,
+            [Provider("duplicate", duplicate), Provider("next", next_provider)],
+            lambda _ep: None, sleep=lambda _seconds: None,
+        )
+        self.assertEqual((episode, label), ({"title": "new"}, "next"))
+        self.assertIn("مختلفة جذريًا", calls[-1])
+
     def test_blocking_provider_call_has_hard_timeout(self):
         with self.assertRaises(ProviderTimeout):
             _run_with_timeout(lambda: time.sleep(2), 1, "test-provider")
