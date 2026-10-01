@@ -66,6 +66,9 @@ VOLUME = "+0%"
 WORDS_PER_CAPTION_CHUNK = int(os.getenv("WORDS_PER_CAPTION_CHUNK", "6"))
 VIDEO_W = 1920
 VIDEO_H = 1080
+# After the 16:9-to-9:16 reel crop/upscale, 160px becomes about 284px of
+# top clearance, safely below the phone notch and app header.
+REEL_CAPTION_SOURCE_TOP_MARGIN = 160
 
 # نموذج Whisper المستخدم لمحاذاة الترجمة مع الصوت الفعلي (انظر
 # align_words_with_whisper أدناه). "base" اختيار متوازن بين السرعة
@@ -377,7 +380,7 @@ def two_lines(words: list[str]) -> str:
 
 
 def build_ass_header() -> str:
-    style = "Style: Caption,Noto Sans Arabic,58,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,3,0,2,70,70,90,1"
+    style = f"Style: Caption,Noto Sans Arabic,58,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,3,0,8,70,70,{REEL_CAPTION_SOURCE_TOP_MARGIN},1"
     return (
         "[Script Info]\nScriptType: v4.00+\n"
         f"PlayResX: {VIDEO_W}\nPlayResY: {VIDEO_H}\n"
