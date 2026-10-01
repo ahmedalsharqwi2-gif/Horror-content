@@ -132,7 +132,6 @@ jobs:
           ASR_MIN_MATCH_RATIO: "0.60"
           EDGE_TTS_RATE: "-8%"
           EDGE_TTS_PITCH: "-3Hz"
-          MUSIC_VOLUME: "0.05"
         run: python scripts/generate_voice.py
 
       - name: Assemble full landscape video and single vertical reel
