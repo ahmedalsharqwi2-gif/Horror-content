@@ -49,6 +49,9 @@ ROOT_DIR = SCRIPT_DIR.parent
 STATE_DIR = ROOT_DIR / "state"
 CLIPS_DIR = ROOT_DIR / "downloaded_clips"
 OUTPUT_DIR = ROOT_DIR / "output"
+SFX_DIR = ROOT_DIR / "assets" / "sfx"
+HORROR_AMBIENCE_GAIN = 0.045
+HORROR_EVENT_GAIN = 0.22
 
 FETCHED_CLIPS_PATH = STATE_DIR / "fetched_clips.json"
 EPISODE_PATH = STATE_DIR / "current_episode.json"
@@ -209,6 +212,32 @@ def extract_subtitle_style(ass_path: Path | None) -> tuple[str, int]:
     return chosen or (FALLBACK_CTA_FONT, FALLBACK_CTA_SIZE)
 
 
+def mix_horror_audio(final_audio: Path, duration: float, output_path: Path) -> Path:
+    """Add a restrained room bed, opening hit, and two distant footstep cues."""
+    ambience = SFX_DIR / "horror_abandoned_room_loop.mp3"
+    footsteps = SFX_DIR / "horror_distant_footsteps.mp3"
+    reveal = SFX_DIR / "horror_reveal_hit.mp3"
+    if not all(p.is_file() for p in (ambience, footsteps, reveal)):
+        raise FileNotFoundError("ملفات مؤثرات الرعب ناقصة داخل assets/sfx")
+    points = [max(0.8, duration * 0.38), max(1.2, duration * 0.72)]
+    inputs = ["-i", str(final_audio), "-stream_loop", "-1", "-i", str(ambience), "-i", str(reveal)]
+    for _ in points:
+        inputs += ["-i", str(footsteps)]
+    filters = [f"[0:a]aresample=48000,volume=1.0[voice]",
+               f"[1:a]aresample=48000,volume={HORROR_AMBIENCE_GAIN},atrim=duration={duration:.3f}[room]",
+               f"[2:a]aresample=48000,volume={HORROR_EVENT_GAIN},adelay=450|450,atrim=duration={duration:.3f}[hit]"]
+    labels = []
+    for index, point in enumerate(points):
+        input_idx = 3 + index
+        label = f"steps{index}"
+        delay = int(point * 1000)
+        filters.append(f"[{input_idx}:a]aresample=48000,volume={HORROR_EVENT_GAIN},adelay={delay}|{delay},atrim=duration={duration:.3f}[{label}]")
+        labels.append(f"[{label}]")
+    filters.append(f"[voice][room][hit]{''.join(labels)}amix=inputs={3+len(points)}:duration=first:dropout_transition=0:normalize=0,alimiter=limit=0.95:level=disabled[a]")
+    run(["ffmpeg", "-y", *inputs, "-filter_complex", ";".join(filters), "-map", "[a]", "-t", f"{duration:.3f}", "-c:a", "libmp3lame", "-b:a", "192k", str(output_path)])
+    return output_path
+
+
 def add_audio_and_subtitles(
     video_path: Path,
     final_audio: Path,
@@ -220,17 +249,19 @@ def add_audio_and_subtitles(
     if sub_filter:
         filters.append(sub_filter)
 
+    mixed_audio = output_path.with_suffix(".mixed.mp3")
+    mix_horror_audio(final_audio, probe_duration(final_audio), mixed_audio)
     command = [
         "ffmpeg", "-y",
         "-i", str(video_path),
-        "-i", str(final_audio),
+        "-i", str(mixed_audio),
     ]
     if filters:
         command += ["-vf", ";".join(filters)]
     command += [
         "-map", "0:v:0",
         "-map", "1:a:0",
-        "-t", f"{probe_duration(final_audio):.3f}",
+        "-t", f"{probe_duration(mixed_audio):.3f}",
         "-c:v", "libx264",
         "-preset", "fast",
         "-crf", "22",
@@ -241,7 +272,10 @@ def add_audio_and_subtitles(
         "-movflags", "+faststart",
         str(output_path),
     ]
-    run(command)
+    try:
+        run(command)
+    finally:
+        mixed_audio.unlink(missing_ok=True)
 
 
 def build_full_video(
