@@ -92,6 +92,7 @@ class LlmGatewayTests(unittest.TestCase):
              patch.object(llm_gateway, "GEMINI_MODELS", ["gemini-model"]), \
              patch.object(llm_gateway, "GROQ_API_KEY", "groq-key"), \
              patch.object(llm_gateway, "GROQ_MODEL", "openai/gpt-oss-120b"), \
+             patch.object(llm_gateway, "GROQ_MODELS", ["openai/gpt-oss-120b"]), \
              patch.object(llm_gateway, "OPENROUTER_API_KEY", "router-key"), \
              patch.object(llm_gateway, "OPENROUTER_MODELS", ["router-model"]), \
              patch.dict("os.environ", {"PREFER_OPENROUTER": "false"}):
@@ -100,6 +101,36 @@ class LlmGatewayTests(unittest.TestCase):
             [p.label for p in providers],
             ["gemini:gemini-model", "groq:openai/gpt-oss-120b", "openrouter:router-model"],
         )
+
+    def test_groq_models_are_rotated_as_independent_providers(self):
+        with patch.object(llm_gateway, "GEMINI_API_KEY", ""), \
+             patch.object(llm_gateway, "GROQ_API_KEY", "groq-key"), \
+             patch.object(llm_gateway, "GROQ_MODELS", ["model-a", "model-b"]), \
+             patch.object(llm_gateway, "OPENROUTER_API_KEY", ""):
+            providers = llm_gateway.build_providers()
+        self.assertEqual([p.label for p in providers], ["groq:model-a", "groq:model-b"])
+
+    def test_rate_limited_provider_is_not_retried(self):
+        calls = []
+
+        def rate_limited(_system, _user, _budget):
+            calls.append("rate")
+            raise RuntimeError("Groq HTTP 429: rate limit")
+
+        def next_provider(_system, _user, _budget):
+            calls.append("next")
+            return '{"title":"x"}'
+
+        providers = [Provider("rate", rate_limited), Provider("next", next_provider)]
+        with patch.object(llm_gateway, "LLM_RETRIES", 3), \
+             patch.object(llm_gateway, "LLM_DEADLINE_SECONDS", 10):
+            episode, label = llm_gateway.generate_valid_episode(
+                "system", "request", 1000, providers, lambda _ep: None,
+                sleep=lambda _seconds: None,
+            )
+        self.assertEqual(episode, {"title": "x"})
+        self.assertEqual(label, "next")
+        self.assertEqual(calls, ["rate", "next"])
 
     def test_blocking_provider_call_has_hard_timeout(self):
         with self.assertRaises(ProviderTimeout):

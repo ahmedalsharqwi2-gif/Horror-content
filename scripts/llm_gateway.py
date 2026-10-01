@@ -44,7 +44,10 @@ GEMINI_MODELS = list(dict.fromkeys(
 GEMINI_THINKING_BUDGET = int(os.getenv("GEMINI_THINKING_BUDGET", "0"))
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+GROQ_MODELS = list(dict.fromkeys(
+    m.strip() for m in os.getenv("GROQ_MODELS", GROQ_MODEL).split(",") if m.strip()
+))
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "")
@@ -375,9 +378,9 @@ def _post_chat(url, key, payload, label, extra_headers=None) -> str:
     return text
 
 
-def _groq_completion(system_prompt, user_message, budget, schema) -> str:
+def _groq_completion_for_model(system_prompt, user_message, budget, schema, model) -> str:
     payload = {
-        "model": GROQ_MODEL,
+        "model": model,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_message},
@@ -391,7 +394,11 @@ def _groq_completion(system_prompt, user_message, budget, schema) -> str:
         },
     }
     return _post_chat("https://api.groq.com/openai/v1/chat/completions",
-                      GROQ_API_KEY, payload, "Groq")
+                      GROQ_API_KEY, payload, f"Groq {model}")
+
+def _groq_completion(system_prompt, user_message, budget, schema) -> str:
+    """Backward-compatible wrapper for callers that use the primary model."""
+    return _groq_completion_for_model(system_prompt, user_message, budget, schema, GROQ_MODEL)
 
 
 def _openrouter_completion(system_prompt, user_message, budget, keys_hint, model=None) -> str:
@@ -436,9 +443,10 @@ def build_providers(episode_schema=EPISODE_SCHEMA, to_gemini_schema=None):
                 f"gemini:{m}",
                 lambda sp, um, b, m=m: _gemini_completion(sp, um, b, m, gemini_schema)))
     if GROQ_API_KEY:
-        providers.append(Provider(
-            f"groq:{GROQ_MODEL}",
-            lambda sp, um, b: _groq_completion(sp, um, b, schema)))
+        for m in GROQ_MODELS:
+            providers.append(Provider(
+                f"groq:{m}",
+                lambda sp, um, b, m=m: _groq_completion_for_model(sp, um, b, schema, m)))
     if not prefer_openrouter:
         add_openrouter()
     if not providers:
@@ -482,7 +490,7 @@ def generate_valid_episode(system_prompt, user_message, budget, providers, valid
                 errors.append(f"{prov.label} [{kind}]: {str(exc)[:150]}")
                 print(f"⚠️ {errors[-1]}")
 
-                if kind in ("quota", "permanent"):
+                if kind in ("quota", "rate", "permanent"):
                     prov.dead = True      # إعادة المحاولة مش هتفيد
                     break
 
@@ -513,7 +521,7 @@ def generate_valid_episode(system_prompt, user_message, budget, providers, valid
                     )
                     continue
 
-                # transient / rate / unknown: انتظار تصاعدي ثم إعادة
+                # transient / unknown: انتظار تصاعدي ثم إعادة
                 transient_tries += 1
                 if transient_tries >= LLM_RETRIES:
                     break

@@ -78,12 +78,15 @@ jobs:
       - name: Generate complete episode script
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODELS: "gemini-3.8-flash,gemini-3.7-flash"
+          # موديلات 3.x أعادت 503 في آخر تشغيل؛ استخدم سلسلة مستقرة مع lite.
+          GEMINI_MODELS: "gemini-2.5-flash,gemini-2.5-flash-lite,gemini-2.0-flash-lite"
           GEMINI_THINKING_BUDGET: "0"
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          GROQ_MODEL: "openai/gpt-oss-120b"
+          # تدوير نماذج Groq يمنع توقف الحلقة بسبب حد نموذج واحد.
+          GROQ_MODEL: "llama-3.1-8b-instant"
+          GROQ_MODELS: "llama-3.1-8b-instant,llama-3.3-70b-versatile,openai/gpt-oss-120b"
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_MODELS: "qwen/qwen3.8-27b:free,google/gemma-4-31b-it:free,nvidia/nemotron-3-super-120b-a12b:free"
+          OPENROUTER_MODELS: "google/gemini-2.5-flash,qwen/qwen3-32b,meta-llama/llama-3.3-70b-instruct:free"
           # Gemini -> Groq first; OpenRouter is the last resort because its
           # free quota may be exhausted and must not delay every episode.
           PREFER_OPENROUTER: "false"
