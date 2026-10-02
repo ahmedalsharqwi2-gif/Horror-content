@@ -132,6 +132,14 @@ def discover_openai_provider(name: str, endpoint: str, key: str, preferred: list
         available = [item for item in available if not any(token in item.lower() for token in ("embedding", "whisper", "tts"))]
     if status == 400:
         raise SystemExit(f"MODEL_PREFLIGHT_ERROR: {name} returned HTTP 400 for /models")
+    # Some Groq keys can invoke an explicitly configured model but are not
+    # permitted to enumerate the account catalog. Do not resurrect a stale
+    # default; trust only a model explicitly supplied by workflow/variables
+    # and let the real completion request perform the final access check.
+    if status == 403 and configured:
+        selected = configured[0]
+        log(f"{name} catalog returned HTTP 403; using explicitly configured model {selected}", warning=True)
+        return selected, configured[1:6]
     if status != 200 or not available:
         log(f"{name} catalog unusable (HTTP {status}, {len(available)} models); skipping provider", warning=True)
         return "", []
