@@ -4,10 +4,18 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+sys.modules.setdefault("edge_tts", types.ModuleType("edge_tts"))
 from scripts.generate_voice import align_words_with_whisper, two_lines
 
 
 class VoiceAlignmentTests(unittest.TestCase):
+    def test_caption_renderer_never_emits_bidi_controls(self):
+        rendered = two_lines(["هذا\u200f", "نص", "عربي", "سليم"])
+
+        self.assertNotIn("\u200f", rendered)
+        self.assertNotIn("\u200e", rendered)
+        self.assertEqual(rendered, "هذا نص\\Nعربي سليم")
+
     def test_six_words_are_split_three_and_three(self):
         rendered = two_lines(["واحد", "اثنان", "ثلاثة", "أربعة", "خمسة", "ستة"])
         self.assertIn(r"\N", rendered)
