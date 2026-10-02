@@ -154,6 +154,27 @@ class LlmGatewayTests(unittest.TestCase):
         self.assertEqual((episode, label), ({"title": "new"}, "next"))
         self.assertIn("مختلفة جذريًا", calls[-1])
 
+    def test_duplicate_topic_starts_a_fresh_generation_round(self):
+        prompts = []
+
+        def generate_once(_system, user, _budget, _providers, _validate):
+            prompts.append(user)
+            if len(prompts) == 1:
+                raise RuntimeError("فشل كل المزوّدين: الموضوع مكرر")
+            return {"title": "موضوع جديد"}, "next"
+
+        with patch.object(llm_gateway, "build_providers", return_value=[]), \
+             patch.object(llm_gateway, "generate_valid_episode", side_effect=generate_once), \
+             patch.object(llm_gateway.time, "sleep"):
+            episode = llm_gateway.generate_episode(
+                "system", 1000, lambda _episode: None,
+                rounds=2, cooldown=0,
+            )
+
+        self.assertEqual(episode["title"], "موضوع جديد")
+        self.assertIn("إعادة اختيار إلزامية", prompts[1])
+        self.assertIn("الموضوع مكرر", prompts[1])
+
     def test_blocking_provider_call_has_hard_timeout(self):
         with self.assertRaises(ProviderTimeout):
             _run_with_timeout(lambda: time.sleep(2), 1, "test-provider")

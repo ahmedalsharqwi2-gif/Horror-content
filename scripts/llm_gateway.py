@@ -567,8 +567,8 @@ def build_user_message(story_type, used_hooks=(), recent_regions=()) -> str:
 
 
 def generate_episode(system_prompt, budget, validate, to_gemini_schema=None,
-                     used_hooks=(), recent_regions=(), rounds=2, cooldown=30):
-    """الواجهة اللي بيناديها main.py. جولتين بينهم راحة، وبعدها فشل صريح."""
+                     used_hooks=(), recent_regions=(), rounds=3, cooldown=30):
+    """Generate an episode, refreshing the topic prompt after duplicate rejection."""
     story_type = pick_story_type()
     user_message = build_user_message(story_type, used_hooks, recent_regions)
 
@@ -579,10 +579,22 @@ def generate_episode(system_prompt, budget, validate, to_gemini_schema=None,
 
     last_error = ""
     for rnd in range(1, rounds + 1):
+        round_message = user_message
+        if rnd > 1:
+            # A duplicate is a content-selection failure, not a reason to stop
+            # the pipeline. Explicitly invalidate the previous candidate and
+            # require a different incident, hook, and region in the next round.
+            round_message += (
+                "\n\n[إعادة اختيار إلزامية] المحاولة السابقة رُفضت لأنها مكررة أو قريبة من سجل سابق. "
+                "اختر الآن موضوعًا مختلفًا جذريًا: حادثة/فكرة وهوك ومنطقة جديدة تمامًا، "
+                "ولا تعِد صياغة الموضوع المرفوض بأي شكل."
+            )
+            if last_error:
+                round_message += f"\nسبب الرفض السابق: {last_error[:500]}"
         providers = build_providers(to_gemini_schema=to_gemini_schema)
         try:
             episode, label = generate_valid_episode(
-                system_prompt, user_message, budget, providers, _validate)
+                system_prompt, round_message, budget, providers, _validate)
             print(f"✅ الحلقة اتولّدت عبر {label} (النمط: {story_type})")
             return episode
         except Exception as exc:  # noqa: BLE001

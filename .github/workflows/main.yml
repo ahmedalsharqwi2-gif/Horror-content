@@ -156,8 +156,10 @@ jobs:
           NARRATION_WORDS_MIN: "150"
           NARRATION_WORDS_MAX: "360"
           LLM_INITIAL_BUDGET: "3200"
-          LLM_ROUNDS: "1"
-          LLM_ROUND_COOLDOWN: "45"
+          # Duplicate topics are rejected, then the next round is explicitly
+          # required to choose a completely different incident and hook.
+          LLM_ROUNDS: "3"
+          LLM_ROUND_COOLDOWN: "10"
         run: python scripts/generate_script.py
 
       - name: Arabic preflight gates (horror)

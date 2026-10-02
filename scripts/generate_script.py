@@ -182,7 +182,7 @@ def generate_episode() -> dict:
             to_gemini_schema=to_gemini_schema,
             used_hooks=load_used_hooks(),
             recent_regions=load_used_regions(),
-            rounds=int(os.getenv("LLM_ROUNDS", "2")),
+            rounds=int(os.getenv("LLM_ROUNDS", "3")),
             cooldown=int(os.getenv("LLM_ROUND_COOLDOWN", "30")),
         )
     except Exception as exc:  # noqa: BLE001 - CLI boundary
