@@ -198,13 +198,14 @@
       "title": "إشارات الأعماق المرتدة",
       "hook": "في عام 2026، تلقت سفينة أبحاث في المحيط الهادئ نبضة صوتية مرتدة من القاع تصف تفاصيل محادثة طاقمها قبل عشر دقائق.",
       "region": "المحيط الهادئ",
-      "status": "reserved",
+      "status": "published",
       "source": "workflow",
-      "story_type": "sci_fi",
-      "reservation_id": "ba42b8259dd34a708b1d640e517b7711",
       "reserved_at": "2026-10-02T01:32:00Z",
       "run_id": "36950338031",
-      "repository": "ahmedalsharqwi2-gif/arabic-horror-stories"
+      "story_type": "sci_fi",
+      "reservation_id": "ba42b8259dd34a708b1d640e517b7711",
+      "repository": "ahmedalsharqwi2-gif/arabic-horror-stories",
+      "published_at": "2026-10-02T01:32:21Z"
     }
   ]
 }
