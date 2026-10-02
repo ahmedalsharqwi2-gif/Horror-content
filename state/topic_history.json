@@ -212,13 +212,14 @@
       "title": "مراقب النفق السويسري",
       "hook": "في عمق نفق غوتهارد، رصد نظام الوزن الآلي كتلة زائدة قدرها سبعون كيلوغراما داخل كل مقطورة فارغة تتجاوز منتصف النفق.",
       "region": "سويسرا",
-      "status": "reserved",
+      "status": "published",
       "source": "workflow",
-      "story_type": "sci_fi",
-      "reservation_id": "2b773832b0eb4a4b85c01b0c4ff77209",
       "reserved_at": "2026-10-02T13:39:12Z",
       "run_id": "37010452190",
-      "repository": "ahmedalsharqwi2-gif/arabic-horror-stories"
+      "story_type": "sci_fi",
+      "reservation_id": "2b773832b0eb4a4b85c01b0c4ff77209",
+      "repository": "ahmedalsharqwi2-gif/arabic-horror-stories",
+      "published_at": "2026-10-02T13:39:34Z"
     }
   ]
 }
