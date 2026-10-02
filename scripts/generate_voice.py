@@ -66,9 +66,9 @@ VOLUME = "+0%"
 WORDS_PER_CAPTION_CHUNK = int(os.getenv("WORDS_PER_CAPTION_CHUNK", "6"))
 VIDEO_W = 1920
 VIDEO_H = 1080
-# After the 16:9-to-9:16 reel crop/upscale, 160px becomes about 284px of
-# top clearance, safely below the phone notch and app header.
-REEL_CAPTION_SOURCE_TOP_MARGIN = 160
+# The horizontal 16:9 master keeps narration captions bottom-centered.  The
+# same master is the source for reels, so leave a safe lower margin for app UI.
+FULL_CAPTION_BOTTOM_MARGIN = 70
 
 # نموذج Whisper المستخدم لمحاذاة الترجمة مع الصوت الفعلي (انظر
 # align_words_with_whisper أدناه). "base" اختيار متوازن بين السرعة
@@ -380,7 +380,7 @@ def two_lines(words: list[str]) -> str:
 
 
 def build_ass_header() -> str:
-    style = f"Style: Caption,Noto Sans Arabic,58,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,3,0,8,70,70,{REEL_CAPTION_SOURCE_TOP_MARGIN},1"
+    style = f"Style: Caption,Noto Sans Arabic,58,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,3,0,2,70,70,{FULL_CAPTION_BOTTOM_MARGIN},1"
     return (
         "[Script Info]\nScriptType: v4.00+\n"
         f"PlayResX: {VIDEO_W}\nPlayResY: {VIDEO_H}\n"
@@ -548,7 +548,18 @@ def synthesize_voice(voice_text: str) -> None:
     try:
         all_word_events = align_words_with_whisper(VOICE_AUDIO, display_words)
     except Exception as exc:  # noqa: BLE001
-        raise RuntimeError(f"فشلت محاذاة Whisper بعد نجاح بوابة ASR: {exc}") from exc
+        # Whisper can under-recognize Arabic even when the ASR gate confirms
+        # the audio is valid. Keep the run alive with Edge WordBoundary timing
+        # instead of dropping an otherwise publishable episode.
+        print(f"⚠️ تعذرت محاذاة Whisper ({exc}) — استخدام توقيت Edge الاحتياطي.")
+        all_word_events = _build_word_events_from_edge_tts(segments)
+        if not all_word_events:
+            duration = probe_duration(VOICE_AUDIO)
+            per_word = duration / max(len(display_words), 1)
+            all_word_events = [
+                {"text": word, "offset": index * per_word, "duration": per_word}
+                for index, word in enumerate(display_words)
+            ]
 
     if not all_word_events:
         sys.exit("❌ تعذر إنشاء توقيت الترجمة.")
