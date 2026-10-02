@@ -130,6 +130,9 @@ jobs:
           # required to choose a completely different incident and hook.
           LLM_ROUNDS: "3"
           LLM_ROUND_COOLDOWN: "10"
+          TOPIC_SELECTION_MODE: "dynamic"
+          TOPIC_ROTATION_SEED: ${{ github.run_id }}
+          TOPIC_PERFORMANCE_FILE: "state/topic_performance.json"
         run: python scripts/generate_script.py
 
       - name: Arabic preflight gates (horror)
