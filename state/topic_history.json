@@ -215,11 +215,24 @@
       "status": "published",
       "source": "workflow",
       "reserved_at": "2026-10-02T13:39:12Z",
+      "published_at": "2026-10-02T13:39:34Z",
       "run_id": "37010452190",
       "story_type": "sci_fi",
       "reservation_id": "2b773832b0eb4a4b85c01b0c4ff77209",
-      "repository": "ahmedalsharqwi2-gif/arabic-horror-stories",
-      "published_at": "2026-10-02T13:39:34Z"
+      "repository": "ahmedalsharqwi2-gif/arabic-horror-stories"
+    },
+    {
+      "id": "62e87a3333983e1d36dd",
+      "title": "إشارة من الماضي",
+      "hook": "في 2027، سجلت محطة بيرن للبحث العلمي إشارة صوتية من نفسها قبل أن تُرسَل بثلاث ثوانٍ",
+      "region": "سويسرا",
+      "status": "reserved",
+      "source": "workflow",
+      "story_type": "sci_fi",
+      "reservation_id": "f3b3ad2417804882ae448125519304c9",
+      "reserved_at": "2026-10-02T16:15:52Z",
+      "run_id": "37029053658",
+      "repository": "ahmedalsharqwi2-gif/arabic-horror-stories"
     }
   ]
 }
