@@ -37,7 +37,7 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 # سلسلة موديلات Gemini: الأساسي ثم بدائل أخف وأكثر توفرًا (بدون تكرار)
 GEMINI_MODELS = list(dict.fromkeys(
     m.strip() for m in os.getenv(
-        "GEMINI_MODELS", f"{GEMINI_MODEL},gemini-2.5-flash,gemini-2.5-flash-lite"
+        "GEMINI_MODELS", f"{GEMINI_MODEL}"
     ).split(",") if m.strip()
 ))
 # التفكير الداخلي بيستهلك من max_output_tokens وبيسبب قطع الرد؛ الصفر يقفله (-1 يتركه للموديل)
@@ -170,6 +170,13 @@ def classify(exc: Exception) -> str:
         return "transient"
     if isinstance(exc, OutputError):
         return "invalid"
+    status = getattr(exc, "status_code", None)
+    if status in (408, 429):
+        return "rate"
+    if status in (500, 502, 503, 504):
+        return "transient"
+    if status in (400, 401, 402, 403, 404):
+        return "permanent"
     msg = str(exc)
     if _has(msg, QUOTA_MARKERS):
         return "quota"      # حصة يومية خلصت: مفيش فايدة من الإعادة
@@ -368,7 +375,12 @@ def _post_chat(url, key, payload, label, extra_headers=None) -> str:
         headers.update(extra_headers)
     r = requests.post(url, headers=headers, json=payload, timeout=REQUEST_TIMEOUT)
     if r.status_code != 200:
-        raise RuntimeError(f"{label} HTTP {r.status_code}: {r.text[:200]}")
+        error = RuntimeError(f"{label} HTTP {r.status_code}: {r.text[:200]}")
+        # ProviderPool uses this metadata to avoid retrying invalid 400/404
+        # requests and to retry/reroute transient 429/5xx responses.
+        error.status_code = r.status_code
+        error.response = r
+        raise error
     choice = (r.json().get("choices") or [{}])[0]
     if choice.get("finish_reason") == "length":
         raise OutputError(f"{label} قطع الرد (length)", truncated=True)

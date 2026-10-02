@@ -29,6 +29,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Direct execution (python scripts/generate_voice.py) must see the repository root.
+ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
 import edge_tts
 from arabic_speech_core.ass_text import render_arabic_caption
 try:

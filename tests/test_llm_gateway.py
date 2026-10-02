@@ -49,6 +49,14 @@ class LlmGatewayTests(unittest.TestCase):
             parse_episode_json('{"title": "x"')
         self.assertTrue(ctx.exception.truncated)
 
+    def test_http_400_is_permanent_but_503_is_transient(self):
+        invalid = RuntimeError("bad request")
+        invalid.status_code = 400
+        transient = RuntimeError("service unavailable")
+        transient.status_code = 503
+        self.assertEqual(llm_gateway.classify(invalid), "permanent")
+        self.assertEqual(llm_gateway.classify(transient), "transient")
+
     def test_validator_rejects_sci_fi_without_fiction_caption(self):
         episode = {
             "title": "اختبار",
