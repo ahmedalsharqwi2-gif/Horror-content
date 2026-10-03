@@ -254,13 +254,14 @@
       "title": "صدى الذاكرة الرقمية",
       "hook": "في عام 2042، استرجع خادم البيانات في محطة أبحاث سيبيريا الرقمية ملفًا صوتيًا محذوفًا بالكامل قبل عشر سنوات من تاريخ تسجيله.",
       "region": "سيبيريا، روسيا",
-      "status": "reserved",
+      "status": "published",
       "source": "workflow",
-      "story_type": "sci_fi",
-      "reservation_id": "42151054ed094d57991bca63500ff34d",
       "reserved_at": "2026-10-03T18:47:10Z",
       "run_id": "37144320243",
-      "repository": "ahmedalsharqwi2-gif/arabic-horror-stories"
+      "story_type": "sci_fi",
+      "reservation_id": "42151054ed094d57991bca63500ff34d",
+      "repository": "ahmedalsharqwi2-gif/arabic-horror-stories",
+      "published_at": "2026-10-03T18:47:33Z"
     }
   ]
 }
