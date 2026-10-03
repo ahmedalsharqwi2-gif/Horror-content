@@ -243,11 +243,24 @@
       "status": "published",
       "source": "workflow",
       "reserved_at": "2026-10-03T08:37:12Z",
+      "published_at": "2026-10-03T08:37:32Z",
       "run_id": "37108904519",
       "story_type": "true_case",
       "reservation_id": "98c51d8941dc44118cc9ad1456e352e8",
-      "repository": "ahmedalsharqwi2-gif/arabic-horror-stories",
-      "published_at": "2026-10-03T08:37:32Z"
+      "repository": "ahmedalsharqwi2-gif/arabic-horror-stories"
+    },
+    {
+      "id": "caed9998793cdd507d4e",
+      "title": "صدى الذاكرة الرقمية",
+      "hook": "في عام 2042، استرجع خادم البيانات في محطة أبحاث سيبيريا الرقمية ملفًا صوتيًا محذوفًا بالكامل قبل عشر سنوات من تاريخ تسجيله.",
+      "region": "سيبيريا، روسيا",
+      "status": "reserved",
+      "source": "workflow",
+      "story_type": "sci_fi",
+      "reservation_id": "42151054ed094d57991bca63500ff34d",
+      "reserved_at": "2026-10-03T18:47:10Z",
+      "run_id": "37144320243",
+      "repository": "ahmedalsharqwi2-gif/arabic-horror-stories"
     }
   ]
 }
