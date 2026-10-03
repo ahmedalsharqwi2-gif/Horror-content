@@ -240,13 +240,14 @@
       "title": "المنارة الحقيقية للرعب fear_case_01",
       "hook": "ثلاثة حراس منارة في اسكتلندا عام 1thoughtful_thought: The user wants a",
       "region": "اسكتلندا",
-      "status": "reserved",
+      "status": "published",
       "source": "workflow",
-      "story_type": "true_case",
-      "reservation_id": "98c51d8941dc44118cc9ad1456e352e8",
       "reserved_at": "2026-10-03T08:37:12Z",
       "run_id": "37108904519",
-      "repository": "ahmedalsharqwi2-gif/arabic-horror-stories"
+      "story_type": "true_case",
+      "reservation_id": "98c51d8941dc44118cc9ad1456e352e8",
+      "repository": "ahmedalsharqwi2-gif/arabic-horror-stories",
+      "published_at": "2026-10-03T08:37:32Z"
     }
   ]
 }
