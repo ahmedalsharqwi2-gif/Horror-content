@@ -20,7 +20,7 @@ class LlmGatewayTests(unittest.TestCase):
         short = {
             "title": "x", "hook": "هوك", "region": "مكان", "story_type": "true_case",
             "basis": "مصدر", "narration": "كلمة " * 10,
-            "visual_keywords": ["night scene"] * 6,
+            "visual_keywords": ["night radio telescope"] * 7,
             "caption": "قصة #رعب", "phonetic_hints": [],
         }
         full = dict(short, narration="كلمة " * 230)
@@ -65,7 +65,7 @@ class LlmGatewayTests(unittest.TestCase):
             "story_type": "sci_fi",
             "basis": "الاتصالات الراديوية",
             "narration": " ".join(["إشارة"] * 230) + ".",
-            "visual_keywords": ["radio station night"] * 6,
+            "visual_keywords": ["night radio station"] * 7,
             "caption": "قصة رعب #رعب",
             "phonetic_hints": [],
         }
@@ -80,7 +80,7 @@ class LlmGatewayTests(unittest.TestCase):
             "story_type": "true_case",
             "basis": "تقرير علمي منشور",
             "narration": " ".join(["إشارة"] * 230) + ".",
-            "visual_keywords": ["night sky radio telescope"] * 6,
+            "visual_keywords": ["night sky radio telescope"] * 7,
             "caption": "قصة غامضة #رعب",
             "phonetic_hints": [{"word": "Flannan", "phonetic": "فلانان"}],
         }

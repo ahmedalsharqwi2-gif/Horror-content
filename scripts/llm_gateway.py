@@ -56,8 +56,8 @@ OPENROUTER_MODELS = list(dict.fromkeys(
 ))
 
 # حدود طول السرد بالكلمات (الموديل بيقدّر الكلمات أدق بكثير من الثواني)
-WORDS_MIN = int(os.getenv("NARRATION_WORDS_MIN", "220"))
-WORDS_MAX = int(os.getenv("NARRATION_WORDS_MAX", "330"))
+WORDS_MIN = int(os.getenv("NARRATION_WORDS_MIN", "230"))
+WORDS_MAX = int(os.getenv("NARRATION_WORDS_MAX", "320"))
 
 STORY_TYPES = ("true_case", "sci_fi")
 
@@ -235,6 +235,7 @@ BANNED_OPENERS = ("في ليلة مظلمة", "هذه قصة حقيقية", "ل�
                   "قصة حقيقية حدثت", "هل تعلم")
 # عبارات ممنوعة في نمط الخيال العلمي لأنها بتقدّم الخيال كحقيقة
 REAL_CLAIMS = ("قصة حقيقية", "حدثت فعلا", "وقعت فعلا", "موثقة رسميا", "حادثة حقيقية")
+EVIDENCE_MARKERS = ("مصدر", "تقرير", "سجل", "صحيفة", "أرشيف", "وثيقة", "موثق", "متداول", "شهادة")
 
 
 def make_validator(find_content_red_flag: Optional[Callable] = None,
@@ -256,8 +257,8 @@ def make_validator(find_content_red_flag: Optional[Callable] = None,
 
         if not hook:
             raise OutputError("hook فاضي")
-        if len(hook.split()) > 28:
-            raise OutputError("hook أطول من اللازم (الحد الأقصى 28 كلمة)")
+        if len(hook.split()) > 25:
+            raise OutputError("hook أطول من اللازم (الحد الأقصى 25 كلمة)")
         for opener in BANNED_OPENERS:
             if hook.startswith(opener) or narration.startswith(opener):
                 raise OutputError(f"افتتاحية مستهلكة ممنوعة: {opener}")
@@ -268,7 +269,7 @@ def make_validator(find_content_red_flag: Optional[Callable] = None,
             raise OutputError("نص narration مقطوع", truncated=True)
         if words < WORDS_MIN:
             raise OutputError(f"narration قصير: {words} كلمة والمطلوب من {WORDS_MIN} إلى {WORDS_MAX}")
-        if words > int(WORDS_MAX * 1.1):
+        if words > WORDS_MAX:
             raise OutputError(f"narration طويل: {words} كلمة والمطلوب من {WORDS_MIN} إلى {WORDS_MAX}")
 
         if find_content_red_flag:
@@ -282,15 +283,20 @@ def make_validator(find_content_red_flag: Optional[Callable] = None,
                     raise OutputError(f"الخيال العلمي ما ينفعش يتقدّم كحقيقة: {claim}")
             if "خيال" not in str(ep["caption"]):
                 raise OutputError("caption لازم يذكر إن القصة خيالية")
+        elif not any(marker in str(ep["basis"]) for marker in EVIDENCE_MARKERS):
+            raise OutputError("true_case يحتاج basis يوضح نوع الدليل أو أن التفصيل متداول")
         if not str(ep["basis"]).strip():
             raise OutputError("basis فاضي")
 
         kws = ep["visual_keywords"]
-        if not isinstance(kws, list) or not (6 <= len(kws) <= 10):
-            raise OutputError("visual_keywords لازم يكون من 6 إلى 10 كلمات بحث")
+        if not isinstance(kws, list) or not (7 <= len(kws) <= 8):
+            raise OutputError("visual_keywords لازم يكون من 7 إلى 8 كلمات بحث")
         for k in kws:
             if not isinstance(k, str) or not re.fullmatch(r"[A-Za-z0-9 ,'\-]+", k.strip()):
                 raise OutputError(f"كلمة بحث لازم تكون إنجليزية فقط: {k!r}")
+            count = len(k.split())
+            if not 3 <= count <= 5:
+                raise OutputError(f"كلمة البحث يجب أن تكون من 3 إلى 5 كلمات: {k!r}")
 
         if "#" not in str(ep["caption"]):
             raise OutputError("caption من غير هاشتاجات")
