@@ -60,7 +60,9 @@ FULL_HEIGHT = 1080
 # الريل: رأسي 9:16 — واحد فقط، من أول الفيديو
 SHORT_WIDTH = 1080
 SHORT_HEIGHT = 1920
-MAX_SHORT_DURATION_SECONDS = 90.0
+# Keep one second of headroom below the platform's 90-second reel limit so
+# container/encoding rounding cannot produce an over-limit upload.
+MAX_SHORT_DURATION_SECONDS = 89.0
 AUTO_END_MARGIN_SECONDS = 8.0
 CTA_DURATION_SECONDS = 4.0
 REEL_CTA_TOP_MARGIN = 620

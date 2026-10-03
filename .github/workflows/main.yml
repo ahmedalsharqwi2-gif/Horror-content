@@ -201,14 +201,18 @@ jobs:
             --expected landscape \
             --min-clips 4
 
+      - name: Confirm live publication mode
+        if: ${{ inputs.dry_run != true }}
+        run: echo "LIVE_PUBLICATION=true — external publishing is enabled"
+
       - name: Reserve unique topic before external publication
-        if: ${{ !inputs.dry_run }}
+        if: ${{ inputs.dry_run != true }}
         env:
           TOPIC_HISTORY_COMMIT: "true"
         run: python scripts/topic_history.py reserve --file state/topic_history.json --episode state/current_episode.json
 
       - name: Publish full video and reel together
-        if: ${{ !inputs.dry_run }}
+        if: ${{ inputs.dry_run != true }}
         env:
           BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
           BUFFER_CHANNEL_ID: ${{ secrets.BUFFER_CHANNEL_ID }}
@@ -228,7 +232,7 @@ jobs:
       # FULL_VIDEO_DELAY_HOURS لازم تكون نفس قيمة الخطوة اللي فاتت، عشان
       # يوتيوب ينشر في نفس توقيت باقي المنصات (والريل) مساءً.
       - name: Publish full video directly to YouTube
-        if: ${{ !inputs.dry_run }}
+        if: ${{ inputs.dry_run != true }}
         env:
           YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
@@ -238,7 +242,7 @@ jobs:
         run: python scripts/publish_youtube_direct.py
 
       - name: Mark topic as published in repository history
-        if: ${{ !inputs.dry_run }}
+        if: ${{ inputs.dry_run != true }}
         env:
           TOPIC_HISTORY_COMMIT: "true"
         run: python scripts/topic_history.py mark-published --file state/topic_history.json --episode state/current_episode.json
